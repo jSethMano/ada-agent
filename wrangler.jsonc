@@ -1,0 +1,14 @@
+{
+	"name": "ada-agent",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-09-18",
+	"observability": {
+		"enabled": true,
+	},
+	"ai": { "binding": "AI" },
+	"durable_objects": {
+		"bindings": [{ "name": "Ada", "class_name": "Ada" }],
+	},
+
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ada"] }],
+}
