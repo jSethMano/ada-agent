@@ -104,6 +104,9 @@ const FAKE_TICKETS: Record<string, IttTicket> = {
 	'77': { id: '77', title: "Laptop won't boot", status: 'resolved', assignee: 'jules@company.com' },
 };
 
+type HistoryEntry = { role: 'user' | 'assistant'; content: string };
+type AdaState = { history: HistoryEntry[] };
+
 export class ItAgent extends Agent<Env> {
 	async onRequest(request: Request): Promise<Response> {
 		if (request.method !== 'POST') {
@@ -142,6 +145,8 @@ export class ItAgent extends Agent<Env> {
 }
 
 export class Ada extends Agent<Env> {
+	initialState: AdaState = { history: [] };
+
 	async onRequest(request: Request): Promise<Response> {
 		if (request.method !== 'POST') {
 			return Response.json({ error: 'POST only' }, { status: 405 });
@@ -152,11 +157,7 @@ export class Ada extends Agent<Env> {
 			return Response.json({ error: 'Must have a question' }, { status: 400 });
 		}
 
-		const messages: unknown[] = [
-			{ role: 'system', content: SYSTEM_PROMPT },
-			{ role: 'user', content: question },
-		];
-
+		const messages: unknown[] = [{ role: 'system', content: SYSTEM_PROMPT }, ...this.state.history, { role: 'user', content: question }];
 		const trace: unknown[] = [];
 
 		for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
@@ -169,8 +170,14 @@ export class Ada extends Agent<Env> {
 			const toolCalls = choice?.tool_calls ?? [];
 
 			if (toolCalls.length === 0) {
+				const answer = choice?.content ?? result.response ?? '';
+
+				this.setState({
+					history: [...this.state.history, { role: 'user', content: question }, { role: 'assistant', content: answer }],
+				});
+
 				return Response.json({
-					answer: choice?.content ?? result.response ?? '',
+					answer,
 					iterations: iteration + 1,
 					trace,
 				});
