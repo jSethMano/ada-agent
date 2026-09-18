@@ -7,8 +7,14 @@
 	},
 	"ai": { "binding": "AI" },
 	"durable_objects": {
-		"bindings": [{ "name": "Ada", "class_name": "Ada" }],
+		"bindings": [
+			{ "name": "Ada", "class_name": "Ada" },
+			{ "name": "ItAgent", "class_name": "ItAgent" },
+		],
 	},
 
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ada"] }],
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["Ada"] },
+		{ "tag": "v2", "new_sqlite_classes": ["ItAgent"] },
+	],
 }
