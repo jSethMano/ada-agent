@@ -211,5 +211,12 @@ export class Ada extends Agent<Env> {
 }
 
 export default {
-	fetch: async (request, env) => (await routeAgentRequest(request, env)) ?? new Response('Not found', { status: 404 }),
+	fetch: async (request, env) => {
+		const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+		const { success } = await env.RATE_LIMITER.limit({ key: ip });
+		if (!success) {
+			return Response.json({ error: 'Rate limit exceeded. Try again in a minute.' }, { status: 429 });
+		}
+		return (await routeAgentRequest(request, env)) ?? new Response('Not found', { status: 404 });
+	},
 } satisfies ExportedHandler<Env>;

@@ -17,4 +17,15 @@
 		{ "tag": "v1", "new_sqlite_classes": ["Ada"] },
 		{ "tag": "v2", "new_sqlite_classes": ["ItAgent"] },
 	],
+
+	"unsafe": {
+		"bindings": [
+			{
+				"name": "RATE_LIMITER",
+				"type": "ratelimit",
+				"namespace_id": "1001",
+				"simple": { "limit": 10, "period": 60 },
+			},
+		],
+	},
 }
