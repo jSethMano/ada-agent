@@ -5,7 +5,16 @@ const SYSTEM_PROMPT =
 	'Employees ask you questions about IT, HR, and internal docs. ' +
 	'For IT questions, you have tools to look up existing tickets and create new ones. ' +
 	'Use tools when the question needs real data (a specific ticket ID, or filing a new problem). ' +
-	'For general questions, answer directly. Be concise: 1-3 sentences.';
+	'For general questions, answer directly. Be concise: 1-3 sentences.\n\n' +
+	'STRICT RULES:\n' +
+	'- To call a tool, use the structured tool-call interface ONLY. Never write tool calls as text ' +
+	'(e.g. do NOT output "[create_ticket(...)]" or "lookup_ticket(id=42)" in your reply).\n' +
+	'- Only report actions and outcomes that a tool result actually confirms. Never claim you created, ' +
+	'sent, emailed, notified, or scheduled anything unless the tool response says so.\n' +
+	'- You have exactly two tools: lookup_ticket and create_ticket. You cannot send emails, ' +
+	'access the IT support portal, or perform any other action. Do not invent capabilities.\n' +
+	'- If you do not have enough information (e.g. a missing ticket ID), ask the user for it ' +
+	'instead of guessing or fabricating.';
 
 // const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 const MODEL = '@cf/meta/llama-4-scout-17b-16e-instruct';
@@ -109,10 +118,12 @@ type HistoryEntry =
 	| { role: 'assistant'; content: string; tool_calls?: OpenAIToolCall[] }
 	| { role: 'tool'; tool_call_id: string; content: string };
 type AdaState = { history: HistoryEntry[] };
-type ItAgentState = { tickets: Record<string, IttTicket> };
+type ItAgentState = { tickets: Record<string, IttTicket>; lastTicketId: number };
 
-export class ItAgent extends Agent<Env> {
-	initialState: ItAgentState = { tickets: {} };
+export class ItAgent extends Agent<Env, ItAgentState> {
+	// 77 is the highest seeded fixture, so the first real ticket is 78 and the
+	// numbering reads as one continuous sequence.
+	initialState: ItAgentState = { tickets: {}, lastTicketId: 77 };
 
 	async onRequest(request: Request): Promise<Response> {
 		if (request.method !== 'POST') {
@@ -131,14 +142,22 @@ export class ItAgent extends Agent<Env> {
 			}
 
 			case 'create_ticket': {
-				const id = String(Math.floor(1000 + Math.random() * 9000));
+				// Sequential rather than random. Math.random() over 9000 ids collides
+				// ~42% of the time by the 100th ticket, and a collision here silently
+				// overwrote a stored ticket, since this is plain key assignment.
+				// `?? 77` covers state persisted before this counter existed.
+				const nextId = (this.state.lastTicketId ?? 77) + 1;
+				const id = String(nextId);
 				const ticket: IttTicket = {
 					id,
 					title: body.args.title,
 					status: 'open',
 					assignee: 'unassigned',
 				};
-				this.setState({ tickets: { ...this.state.tickets, [id]: ticket } });
+				this.setState({
+					tickets: { ...this.state.tickets, [id]: ticket },
+					lastTicketId: nextId,
+				});
 				return Response.json({
 					result: {
 						created: true,
@@ -157,7 +176,7 @@ export class ItAgent extends Agent<Env> {
 	}
 }
 
-export class Ada extends Agent<Env> {
+export class Ada extends Agent<Env, AdaState> {
 	initialState: AdaState = { history: [] };
 
 	async onRequest(request: Request): Promise<Response> {
