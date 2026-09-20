@@ -104,10 +104,16 @@ const FAKE_TICKETS: Record<string, IttTicket> = {
 	'77': { id: '77', title: "Laptop won't boot", status: 'resolved', assignee: 'jules@company.com' },
 };
 
-type HistoryEntry = { role: 'user' | 'assistant'; content: string };
+type HistoryEntry =
+	| { role: 'user'; content: string }
+	| { role: 'assistant'; content: string; tool_calls?: OpenAIToolCall[] }
+	| { role: 'tool'; tool_call_id: string; content: string };
 type AdaState = { history: HistoryEntry[] };
+type ItAgentState = { tickets: Record<string, IttTicket> };
 
 export class ItAgent extends Agent<Env> {
+	initialState: ItAgentState = { tickets: {} };
+
 	async onRequest(request: Request): Promise<Response> {
 		if (request.method !== 'POST') {
 			return Response.json({ error: 'POST only' }, { status: 405 });
@@ -117,7 +123,7 @@ export class ItAgent extends Agent<Env> {
 
 		switch (body.tool) {
 			case 'lookup_ticket': {
-				const ticket = FAKE_TICKETS[body.args.ticket_id];
+				const ticket = this.state.tickets[body.args.ticket_id] ?? FAKE_TICKETS[body.args.ticket_id];
 				if (!ticket) {
 					return Response.json({ result: { found: false, ticket_id: body.args.ticket_id } });
 				}
@@ -126,6 +132,13 @@ export class ItAgent extends Agent<Env> {
 
 			case 'create_ticket': {
 				const id = String(Math.floor(1000 + Math.random() * 9000));
+				const ticket: IttTicket = {
+					id,
+					title: body.args.title,
+					status: 'open',
+					assignee: 'unassigned',
+				};
+				this.setState({ tickets: { ...this.state.tickets, [id]: ticket } });
 				return Response.json({
 					result: {
 						created: true,
@@ -157,7 +170,8 @@ export class Ada extends Agent<Env> {
 			return Response.json({ error: 'Must have a question' }, { status: 400 });
 		}
 
-		const messages: unknown[] = [{ role: 'system', content: SYSTEM_PROMPT }, ...this.state.history, { role: 'user', content: question }];
+		const newTurn: HistoryEntry[] = [{ role: 'user', content: question }];
+		const messages: unknown[] = [{ role: 'system', content: SYSTEM_PROMPT }, ...this.state.history, ...newTurn];
 		const trace: unknown[] = [];
 
 		for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
@@ -171,10 +185,8 @@ export class Ada extends Agent<Env> {
 
 			if (toolCalls.length === 0) {
 				const answer = choice?.content ?? result.response ?? '';
-
-				this.setState({
-					history: [...this.state.history, { role: 'user', content: question }, { role: 'assistant', content: answer }],
-				});
+				newTurn.push({ role: 'assistant', content: answer });
+				this.setState({ history: [...this.state.history, ...newTurn] });
 
 				return Response.json({
 					answer,
@@ -183,14 +195,14 @@ export class Ada extends Agent<Env> {
 				});
 			}
 
-			// Push the assistant turn (WITH tool_calls in OpenAI shape) back into history.
-			messages.push({
+			const assistantEntry: HistoryEntry = {
 				role: 'assistant',
 				content: choice?.content ?? '',
 				tool_calls: toolCalls,
-			});
+			};
+			messages.push(assistantEntry);
+			newTurn.push(assistantEntry);
 
-			// Dispatch each tool call to its sub-agent, append the result with tool_call_id.
 			for (const call of toolCalls) {
 				const args = JSON.parse(call.function.arguments) as Record<string, unknown>;
 				const toolResult = await dispatchTool(this.env, {
@@ -198,11 +210,13 @@ export class Ada extends Agent<Env> {
 					arguments: args,
 				});
 				trace.push({ tool: call.function.name, args, result: toolResult });
-				messages.push({
+				const toolEntry: HistoryEntry = {
 					role: 'tool',
 					tool_call_id: call.id,
 					content: JSON.stringify(toolResult),
-				});
+				};
+				messages.push(toolEntry);
+				newTurn.push(toolEntry);
 			}
 		}
 
