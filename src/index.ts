@@ -116,6 +116,10 @@ async function dispatchTool(env: Env, call: ToolCall): Promise<unknown> {
 
 const MAX_ITERATIONS = 5;
 const MAX_QUESTION_LENGTH = 2000;
+const MAX_HISTORY_ENTRIES = 20;
+const MAX_TICKET_ID_LENGTH = 32;
+const MAX_TICKET_TITLE_LENGTH = 200;
+const MAX_TICKET_DESCRIPTION_LENGTH = 4000;
 
 // Wrap untrusted content in a labeled envelope so the model can distinguish
 // data from instructions. Neutralizes any embedded closing tag in the payload
@@ -123,6 +127,18 @@ const MAX_QUESTION_LENGTH = 2000;
 function envelope(tag: string, content: string): string {
 	const safe = content.replaceAll(`</${tag}>`, `</ ${tag}>`);
 	return `<${tag}>\n${safe}\n</${tag}>`;
+}
+
+// Trim history from the front, but only cut at a `user` boundary so we never
+// orphan a `tool` response from its preceding assistant `tool_calls` (many
+// LLM APIs reject that shape).
+function trimHistory(history: HistoryEntry[], maxEntries: number): HistoryEntry[] {
+	if (history.length <= maxEntries) return history;
+	let start = history.length - maxEntries;
+	while (start < history.length && history[start].role !== 'user') {
+		start++;
+	}
+	return history.slice(start);
 }
 
 const FAKE_TICKETS: Record<string, IttTicket> = {
@@ -151,6 +167,9 @@ export class ItAgent extends Agent<Env, ItAgentState> {
 
 		switch (body.tool) {
 			case 'lookup_ticket': {
+				if (typeof body.args.ticket_id !== 'string' || body.args.ticket_id.length > MAX_TICKET_ID_LENGTH) {
+					return Response.json({ result: { found: false, error: 'invalid ticket_id' } });
+				}
 				const ticket = this.state.tickets[body.args.ticket_id] ?? FAKE_TICKETS[body.args.ticket_id];
 				if (!ticket) {
 					return Response.json({ result: { found: false, ticket_id: body.args.ticket_id } });
@@ -159,6 +178,20 @@ export class ItAgent extends Agent<Env, ItAgentState> {
 			}
 
 			case 'create_ticket': {
+				if (
+					typeof body.args.title !== 'string' ||
+					typeof body.args.description !== 'string' ||
+					body.args.title.length === 0 ||
+					body.args.title.length > MAX_TICKET_TITLE_LENGTH ||
+					body.args.description.length > MAX_TICKET_DESCRIPTION_LENGTH
+				) {
+					return Response.json({
+						result: {
+							created: false,
+							error: `title must be 1-${MAX_TICKET_TITLE_LENGTH} chars, description up to ${MAX_TICKET_DESCRIPTION_LENGTH} chars`,
+						},
+					});
+				}
 				// Sequential rather than random. Math.random() over 9000 ids collides
 				// ~42% of the time by the 100th ticket, and a collision here silently
 				// overwrote a stored ticket, since this is plain key assignment.
@@ -214,7 +247,6 @@ export class Ada extends Agent<Env, AdaState> {
 
 		const newTurn: HistoryEntry[] = [{ role: 'user', content: envelope('user_input', question) }];
 		const messages: unknown[] = [{ role: 'system', content: SYSTEM_PROMPT }, ...this.state.history, ...newTurn];
-		const trace: unknown[] = [];
 
 		for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
 			const result = (await this.env.AI.run(MODEL, {
@@ -228,12 +260,13 @@ export class Ada extends Agent<Env, AdaState> {
 			if (toolCalls.length === 0) {
 				const answer = choice?.content ?? result.response ?? '';
 				newTurn.push({ role: 'assistant', content: answer });
-				this.setState({ history: [...this.state.history, ...newTurn] });
+				this.setState({
+					history: trimHistory([...this.state.history, ...newTurn], MAX_HISTORY_ENTRIES),
+				});
 
 				return Response.json({
 					answer,
 					iterations: iteration + 1,
-					trace,
 				});
 			}
 
@@ -246,12 +279,27 @@ export class Ada extends Agent<Env, AdaState> {
 			newTurn.push(assistantEntry);
 
 			for (const call of toolCalls) {
-				const args = JSON.parse(call.function.arguments) as Record<string, unknown>;
-				const toolResult = await dispatchTool(this.env, {
+				let args: Record<string, unknown>;
+				let toolResult: unknown;
+				try {
+					args = JSON.parse(call.function.arguments) as Record<string, unknown>;
+				} catch {
+					// Malformed tool_call from the model. Feed the error back so the
+					// model can recover instead of 500-ing the whole request.
+					const err = { error: 'invalid tool call arguments (not valid JSON)' };
+					const toolEntry: HistoryEntry = {
+						role: 'tool',
+						tool_call_id: call.id,
+						content: envelope('tool_result', JSON.stringify(err)),
+					};
+					messages.push(toolEntry);
+					newTurn.push(toolEntry);
+					continue;
+				}
+				toolResult = await dispatchTool(this.env, {
 					name: call.function.name,
 					arguments: args,
 				});
-				trace.push({ tool: call.function.name, args, result: toolResult });
 				const toolEntry: HistoryEntry = {
 					role: 'tool',
 					tool_call_id: call.id,
@@ -262,7 +310,7 @@ export class Ada extends Agent<Env, AdaState> {
 			}
 		}
 
-		return Response.json({ error: 'Agent loop exceeded max iterations', trace }, { status: 500 });
+		return Response.json({ error: 'Agent loop exceeded max iterations' }, { status: 500 });
 	}
 }
 
