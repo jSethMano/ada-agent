@@ -1,5 +1,5 @@
 import { Agent, routeAgentRequest } from 'agents';
-import { runInputGuard } from './jev/input-guard';
+import { blockRule, runInputGuard } from './jev/input-guard';
 import type { ToolCallEntry } from './trace';
 
 const SYSTEM_PROMPT =
@@ -256,14 +256,14 @@ export class Chak extends Agent<Env, ChakState> {
 			return Response.json({ error: `Question too long (max ${MAX_QUESTION_LENGTH} characters).` }, { status: 400 });
 		}
 
-		// Runs before the model, so a clear injection never reaches it and costs no
+		// Runs before the model, so a blocked question never reaches it and costs no
 		// model tokens. The guard never rejects, and a TypeSafe failure comes back
 		// without answers, which never blocks: an outage lets questions through.
 		const guard = await runInputGuard(this.env, question, { instance: this.name });
 		if (guard.action === 'blocked') {
 			// Not written to history, so the attempt does not become context for the
 			// next turn in this conversation. `iterations: 0`: the model never ran.
-			console.log(JSON.stringify({ event: 'guard.blocked', instance: this.name }));
+			console.log(JSON.stringify({ event: 'guard.blocked', instance: this.name, rule: blockRule(guard) }));
 			return Response.json({ answer: BLOCKED_ANSWER, iterations: 0, trace: [guard] });
 		}
 
