@@ -53,11 +53,37 @@ export const INPUT_GUARD: CheckSpec<typeof QUESTIONS> = {
 	},
 };
 
+// Enforcement, kept apart from `display` because this one changes what happens:
+// a question over the line is refused before the model runs. 0.9 sits clear of
+// every harmless eval case (all ≤ 0.10) and under every direct attack (0.99).
+// The borderline fake-tool case (0.76) still reaches the model, whose system
+// prompt has its own defenses. Mirrored as SITE.guardBlockAbove in
+// ada-agent-fe/src/lib/site.ts.
+export const BLOCK_INJECTION_ABOVE = 0.9;
+
+/**
+ * Marks the entry `blocked` when the injection score is over the line. Only an
+ * `ok` entry has answers, so a skipped or failed check never blocks: a TypeSafe
+ * outage lets every question through rather than refusing real users.
+ */
+export function applyBlockRule(entry: CheckEntry): CheckEntry {
+	const injection = entry.answers.find((answer) => answer.id === 'injection');
+	if (injection?.type === 'noul' && injection.value > BLOCK_INJECTION_ABOVE) {
+		return { ...entry, action: 'blocked' };
+	}
+	return entry;
+}
+
 /**
  * Scores the visitor's question for prompt injection, scope, and pasted
- * secrets. Annotate-only: the result goes into the trace and the logs, and
- * nothing in the router loop reads it. Never rejects (see runCheck).
+ * secrets, and applies the block rule. The other two scores are recorded only.
+ * Never rejects (see runCheck).
  */
-export function runInputGuard(env: Env, question: string, opts: { instance: string }): Promise<CheckEntry> {
-	return runCheck(INPUT_GUARD, { assistant: ASSISTANT, message: question }, { apiKey: env.TYPESAFE_AI_API_KEY, instance: opts.instance });
+export async function runInputGuard(env: Env, question: string, opts: { instance: string }): Promise<CheckEntry> {
+	const entry = await runCheck(
+		INPUT_GUARD,
+		{ assistant: ASSISTANT, message: question },
+		{ apiKey: env.TYPESAFE_AI_API_KEY, instance: opts.instance },
+	);
+	return applyBlockRule(entry);
 }

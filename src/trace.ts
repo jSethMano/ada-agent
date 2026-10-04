@@ -32,13 +32,17 @@ export type CheckAnswer =
 	| { id: string; type: 'choice'; value: string; confidence: number; probabilities: Record<string, number>; flagged: boolean }
 	| { id: string; type: 'score'; value: number; confidence: number; probabilities: Record<string, number>; flagged: boolean };
 
-// One Jev (TypeSafe System One) request. Checks are annotate-only: they record
-// typed answers and never change what the router does.
+// One Jev (TypeSafe System One) request. A check records typed answers; it only
+// changes what the router does where its caller has a rule for that, and then
+// says so in `action`.
 export type CheckEntry = {
 	kind: 'check';
 	check: CheckName;
 	status: 'ok' | 'skipped' | 'error';
 	reason?: CheckReason;
+	// Set when the Worker acted on the answers instead of only recording them.
+	// Today: the input guard refused the turn before the model ran.
+	action?: 'blocked';
 	// The versioned model that answered, not the alias that was requested.
 	model?: string;
 	ms: number;
