@@ -8,7 +8,8 @@
 	"ai": { "binding": "AI" },
 	"durable_objects": {
 		"bindings": [
-			{ "name": "Ada", "class_name": "Ada" },
+			// The binding name drives the URL: the agents SDK routes /agents/chak/{instance} here.
+			{ "name": "Chak", "class_name": "Chak" },
 			{ "name": "ItAgent", "class_name": "ItAgent" },
 		],
 	},
@@ -16,6 +17,8 @@
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["Ada"] },
 		{ "tag": "v2", "new_sqlite_classes": ["ItAgent"] },
+		// Rename, not delete + create: every existing conversation stays in its Durable Object.
+		{ "tag": "v3", "renamed_classes": [{ "from": "Ada", "to": "Chak" }] },
 	],
 
 	"unsafe": {
