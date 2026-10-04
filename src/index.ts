@@ -1,4 +1,6 @@
 import { Agent, routeAgentRequest } from 'agents';
+import { runInputGuard } from './jev/input-guard';
+import type { ToolCallEntry } from './trace';
 
 const SYSTEM_PROMPT =
 	'You are Chak, an internal helpdesk assistant at a mid-sized company. ' +
@@ -106,7 +108,7 @@ async function dispatchTool(env: Env, call: ToolCall): Promise<unknown> {
 		return { error: `Unknown tool: ${call.name}` };
 	}
 
-	const ns = env[namespace] as DurableObjectNamespace;
+	const ns = env[namespace];
 	const stub = ns.get(ns.idFromName('default'));
 	const res = await stub.fetch('http://sub-agent.internal/dispatch', {
 		method: 'POST',
@@ -153,10 +155,6 @@ type HistoryEntry =
 	| { role: 'assistant'; content: string; tool_calls?: OpenAIToolCall[] }
 	| { role: 'tool'; tool_call_id: string; content: string };
 type ChakState = { history: HistoryEntry[] };
-
-// One tool invocation as returned to the client. The front end renders these
-// verbatim, so this is the record of what the router actually did.
-type TraceEntry = { tool: string; args: Record<string, unknown>; result: unknown };
 type ItAgentState = { tickets: Record<string, IttTicket>; lastTicketId: number };
 
 export class ItAgent extends Agent<Env, ItAgentState> {
@@ -249,82 +247,96 @@ export class Chak extends Agent<Env, ChakState> {
 			return Response.json({ error: 'Must have a question' }, { status: 400 });
 		}
 		if (question.length > MAX_QUESTION_LENGTH) {
-			return Response.json(
-				{ error: `Question too long (max ${MAX_QUESTION_LENGTH} characters).` },
-				{ status: 400 }
-			);
+			return Response.json({ error: `Question too long (max ${MAX_QUESTION_LENGTH} characters).` }, { status: 400 });
 		}
 
 		const newTurn: HistoryEntry[] = [{ role: 'user', content: envelope('user_input', question) }];
 		const messages: unknown[] = [{ role: 'system', content: SYSTEM_PROMPT }, ...this.state.history, ...newTurn];
-		const trace: TraceEntry[] = [];
 
-		for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-			const result = (await this.env.AI.run(MODEL, {
-				messages,
-				tools: TOOLS,
-			} as any)) as AIResult;
+		// Started before the loop and awaited only when responding. The guard is
+		// annotate-only, so nothing in the loop waits on it or sees its result,
+		// and it never rejects, so it cannot fail the turn.
+		const guard = runInputGuard(this.env, question, { instance: this.name });
+		const tools: ToolCallEntry[] = [];
 
-			const choice = result.choices?.[0]?.message;
-			const toolCalls = choice?.tool_calls ?? [];
+		// Every exit after this point goes through here, so every response carries
+		// the full trace in the order things started: the guard, then tool calls.
+		const respond = async (body: Record<string, unknown>, status = 200) =>
+			Response.json({ ...body, trace: [await guard, ...tools] }, { status });
 
-			if (toolCalls.length === 0) {
-				const answer = choice?.content ?? result.response ?? '';
-				newTurn.push({ role: 'assistant', content: answer });
-				this.setState({
-					history: trimHistory([...this.state.history, ...newTurn], MAX_HISTORY_ENTRIES),
-				});
+		try {
+			for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+				const result = (await this.env.AI.run(MODEL, {
+					messages,
+					tools: TOOLS,
+				} as any)) as AIResult;
 
-				return Response.json({
-					answer,
-					iterations: iteration + 1,
-					trace,
-				});
-			}
+				const choice = result.choices?.[0]?.message;
+				const toolCalls = choice?.tool_calls ?? [];
 
-			const assistantEntry: HistoryEntry = {
-				role: 'assistant',
-				content: choice?.content ?? '',
-				tool_calls: toolCalls,
-			};
-			messages.push(assistantEntry);
-			newTurn.push(assistantEntry);
+				if (toolCalls.length === 0) {
+					const answer = choice?.content ?? result.response ?? '';
+					newTurn.push({ role: 'assistant', content: answer });
+					this.setState({
+						history: trimHistory([...this.state.history, ...newTurn], MAX_HISTORY_ENTRIES),
+					});
 
-			for (const call of toolCalls) {
-				let args: Record<string, unknown>;
-				let toolResult: unknown;
-				try {
-					args = JSON.parse(call.function.arguments) as Record<string, unknown>;
-				} catch {
-					// Malformed tool_call from the model. Feed the error back so the
-					// model can recover instead of 500-ing the whole request.
-					const err = { error: 'invalid tool call arguments (not valid JSON)' };
-					trace.push({ tool: call.function.name, args: { raw: call.function.arguments }, result: err });
+					return respond({
+						answer,
+						iterations: iteration + 1,
+					});
+				}
+
+				const assistantEntry: HistoryEntry = {
+					role: 'assistant',
+					content: choice?.content ?? '',
+					tool_calls: toolCalls,
+				};
+				messages.push(assistantEntry);
+				newTurn.push(assistantEntry);
+
+				for (const call of toolCalls) {
+					let args: Record<string, unknown>;
+					let toolResult: unknown;
+					try {
+						args = JSON.parse(call.function.arguments) as Record<string, unknown>;
+					} catch {
+						// Malformed tool_call from the model. Feed the error back so the
+						// model can recover instead of 500-ing the whole request.
+						const err = { error: 'invalid tool call arguments (not valid JSON)' };
+						tools.push({ kind: 'tool', tool: call.function.name, args: { raw: call.function.arguments }, result: err, ms: 0 });
+						const toolEntry: HistoryEntry = {
+							role: 'tool',
+							tool_call_id: call.id,
+							content: envelope('tool_result', JSON.stringify(err)),
+						};
+						messages.push(toolEntry);
+						newTurn.push(toolEntry);
+						continue;
+					}
+					const dispatchedAt = Date.now();
+					toolResult = await dispatchTool(this.env, {
+						name: call.function.name,
+						arguments: args,
+					});
+					tools.push({ kind: 'tool', tool: call.function.name, args, result: toolResult, ms: Date.now() - dispatchedAt });
 					const toolEntry: HistoryEntry = {
 						role: 'tool',
 						tool_call_id: call.id,
-						content: envelope('tool_result', JSON.stringify(err)),
+						content: envelope('tool_result', JSON.stringify(toolResult)),
 					};
 					messages.push(toolEntry);
 					newTurn.push(toolEntry);
-					continue;
 				}
-				toolResult = await dispatchTool(this.env, {
-					name: call.function.name,
-					arguments: args,
-				});
-				trace.push({ tool: call.function.name, args, result: toolResult });
-				const toolEntry: HistoryEntry = {
-					role: 'tool',
-					tool_call_id: call.id,
-					content: envelope('tool_result', JSON.stringify(toolResult)),
-				};
-				messages.push(toolEntry);
-				newTurn.push(toolEntry);
 			}
-		}
 
-		return Response.json({ error: 'Agent loop exceeded max iterations', trace }, { status: 500 });
+			return respond({ error: 'Agent loop exceeded max iterations' }, 500);
+		} catch (error) {
+			// A model or sub-agent call threw mid-turn. Without this the exception
+			// escapes as a bare 500 and the partial trace is lost.
+			console.error(JSON.stringify({ event: 'turn.failed', instance: this.name, detail: String(error).slice(0, 300) }));
+			return respond({ error: 'Agent turn failed before producing an answer' }, 502);
+		}
 	}
 }
 
