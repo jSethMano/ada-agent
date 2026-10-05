@@ -24,12 +24,17 @@ export function envelope(tag: string, content: string): string {
 	return `<${tag}>\n${safe}\n</${tag}>`;
 }
 
+// The inverse of envelope(): the text inside the tags.
+function envelopeText(tag: string, content: string): string {
+	const open = `<${tag}>\n`;
+	const close = `\n</${tag}>`;
+	return content.startsWith(open) && content.endsWith(close) ? content.slice(open.length, -close.length) : content;
+}
+
 // The inverse of envelope() for JSON payloads. Anything that does not parse
 // comes back as the text it was.
 function openEnvelope(tag: string, content: string): unknown {
-	const open = `<${tag}>\n`;
-	const close = `\n</${tag}>`;
-	const inner = content.startsWith(open) && content.endsWith(close) ? content.slice(open.length, -close.length) : content;
+	const inner = envelopeText(tag, content);
 	try {
 		return JSON.parse(inner);
 	} catch {
@@ -80,4 +85,16 @@ export function toolCallsIn(history: HistoryEntry[]): RecordedToolCall[] {
 		}
 	}
 	return recorded;
+}
+
+/**
+ * The visitor's last `limit` messages in `history`, oldest first, as they
+ * typed them. Text, never parsed: a message that happens to be valid JSON
+ * ("42") is still what the visitor said.
+ */
+export function userMessagesIn(history: HistoryEntry[], limit: number): string[] {
+	return history
+		.filter((entry) => entry.role === 'user')
+		.slice(-limit)
+		.map((entry) => envelopeText('user_input', entry.content));
 }

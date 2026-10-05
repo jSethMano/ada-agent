@@ -30,6 +30,11 @@ describe('Worker', () => {
 		expect(response.status).toBe(400);
 	});
 
+	it('does not expose the sub-agents: only the router is public', async () => {
+		const response = await ask('/agents/it-agent/default', { tool: 'lookup_ticket', args: { ticket_id: '42' } });
+		expect(response.status).toBe(404);
+	});
+
 	it('still routes the pre-rename /agents/ada/ prefix to Chak', async () => {
 		const response = await ask('/agents/ada/test-instance', {});
 		expect(response.status).toBe(400);

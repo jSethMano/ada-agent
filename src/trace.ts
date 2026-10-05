@@ -14,9 +14,11 @@ export type ToolCallEntry = {
 	ms: number;
 };
 
-// input_guard runs on the question before the model; verify_answer runs on the
-// answer after the loop, so its row is always last.
-export type CheckName = 'input_guard' | 'verify_answer';
+// input_guard runs on the question before the model. triage_ticket runs inside
+// the loop, just before each create_ticket it judges, so its row sits directly
+// above that call. verify_answer runs on the answer after the loop, so its row
+// is always last.
+export type CheckName = 'input_guard' | 'triage_ticket' | 'verify_answer';
 
 export type CheckReason =
 	| 'no_api_key' // skipped: the secret is not configured
@@ -45,7 +47,9 @@ export type CheckEntry = {
 	// Set when the Worker acted on the answers instead of only recording them.
 	// `blocked`: the input guard refused the turn before the model ran.
 	// `replaced`: the answer check found a leak and the visitor got fixed text.
-	action?: 'blocked' | 'replaced';
+	// `held`: triage found no problem the visitor described, so the ticket was
+	// not filed and the model was told to ask.
+	action?: 'blocked' | 'replaced' | 'held';
 	// The versioned model that answered, not the alias that was requested.
 	model?: string;
 	ms: number;

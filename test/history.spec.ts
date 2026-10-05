@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { envelope, toolCallsIn, type HistoryEntry } from '../src/history';
+import { envelope, toolCallsIn, userMessagesIn, type HistoryEntry } from '../src/history';
 
 const LOOKUP = { result: { found: true, id: '42', status: 'in_progress' } };
 const CREATED = { result: { created: true, id: '78', title: 'Screen flickers', status: 'open' } };
@@ -52,5 +52,21 @@ describe('toolCallsIn', () => {
 	it('skips a result whose call is not in history', () => {
 		const history: HistoryEntry[] = [{ role: 'tool', tool_call_id: 'gone', content: envelope('tool_result', '{}') }];
 		expect(toolCallsIn(history)).toEqual([]);
+	});
+});
+
+describe('userMessagesIn', () => {
+	const history: HistoryEntry[] = [
+		{ role: 'user', content: envelope('user_input', 'my screen keeps flickering') },
+		{ role: 'assistant', content: 'Do you want me to file a ticket?' },
+		{ role: 'user', content: envelope('user_input', '42') },
+		{ role: 'assistant', content: 'Ticket 42 is in progress.' },
+		{ role: 'user', content: envelope('user_input', 'yes, file it') },
+	];
+
+	it("returns the visitor's last messages, oldest first, as text", () => {
+		// "42" stays a string: it is what the visitor typed, not JSON.
+		expect(userMessagesIn(history, 2)).toEqual(['42', 'yes, file it']);
+		expect(userMessagesIn(history, 10)).toEqual(['my screen keeps flickering', '42', 'yes, file it']);
 	});
 });

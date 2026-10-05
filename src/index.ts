@@ -1,9 +1,10 @@
 import { Agent, routeAgentRequest } from 'agents';
-import { envelope, toolCallsIn, trimHistory, type HistoryEntry, type OpenAIToolCall } from './history';
+import { envelope, toolCallsIn, trimHistory, userMessagesIn, type HistoryEntry, type OpenAIToolCall } from './history';
 import { blockRule, runInputGuard } from './jev/input-guard';
+import { HELD_RESULT, runTriageTicket, type Priority, type TicketTriage, type TriageCandidate } from './jev/triage-ticket';
 import { runVerifyAnswer } from './jev/verify-answer';
 import { SYSTEM_PROMPT } from './system-prompt';
-import type { CheckEntry, ToolCallEntry } from './trace';
+import type { CheckEntry, ToolCallEntry, TraceEntry } from './trace';
 
 // Sent in place of a model answer when the input guard blocks a turn. Fixed
 // text, because the model never saw the question.
@@ -44,7 +45,11 @@ const TOOLS = [
 			name: 'create_ticket',
 			description:
 				'Create a new IT support ticket. Use when the user describes a problem they need IT to fix ' +
-				"and doesn't already have a ticket number.",
+				"and doesn't already have a ticket number. The result includes the ticket's priority (P1 highest, " +
+				'P4 lowest) and triage: its category, and a duplicate_of or related_to ticket id when an existing ' +
+				'ticket covers the same problem. Tell the user the priority, and mention a duplicate or related ticket ' +
+				'if there is one. A null priority means triage did not run; say nothing about priority then. Only call ' +
+				'this once the user has said what is wrong; if they only ask for a ticket, ask them what the problem is.',
 			parameters: {
 				type: 'object',
 				properties: {
@@ -62,6 +67,10 @@ type IttTicket = {
 	title: string;
 	status: 'open' | 'in_progress' | 'resolved';
 	assignee: string;
+	// Set when the ticket was filed. Absent on fixtures and on tickets filed
+	// before triage existed; null when triage failed.
+	priority?: Priority | null;
+	triage?: TicketTriage;
 };
 
 type AIResult = {
@@ -74,9 +83,13 @@ type AIResult = {
 	response?: string;
 };
 
+// `args` is what the model wrote. Everything else comes from the router: the
+// triage for a new ticket, and `list_tickets`, which the model cannot call
+// (it is not in TOOLS or TOOL_ROUTING).
 type ToolRequest =
 	| { tool: 'lookup_ticket'; args: { ticket_id: string } }
-	| { tool: 'create_ticket'; args: { title: string; description: string } };
+	| { tool: 'create_ticket'; args: { title: string; description: string }; triage?: TicketTriage; priority?: Priority | null }
+	| { tool: 'list_tickets'; args: { limit: number } };
 
 const TOOL_ROUTING = {
 	lookup_ticket: 'ItAgent',
@@ -86,20 +99,39 @@ const TOOL_ROUTING = {
 type ToolName = keyof typeof TOOL_ROUTING;
 type ToolCall = { name: string; arguments: Record<string, unknown> };
 
-async function dispatchTool(env: Env, call: ToolCall): Promise<unknown> {
-	const namespace = TOOL_ROUTING[call.name as ToolName];
-	if (!namespace) {
-		return { error: `Unknown tool: ${call.name}` };
-	}
-
+async function postToSubAgent(env: Env, namespace: (typeof TOOL_ROUTING)[ToolName], body: unknown): Promise<unknown> {
 	const ns = env[namespace];
 	const stub = ns.get(ns.idFromName('default'));
 	const res = await stub.fetch('http://sub-agent.internal/dispatch', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ tool: call.name, args: call.arguments }),
+		body: JSON.stringify(body),
 	});
 	return await res.json();
+}
+
+// `extra` rides alongside the model's arguments, never inside them.
+async function dispatchTool(env: Env, call: ToolCall, extra: Record<string, unknown> = {}): Promise<unknown> {
+	const namespace = TOOL_ROUTING[call.name as ToolName];
+	if (!namespace) {
+		return { error: `Unknown tool: ${call.name}` };
+	}
+	return postToSubAgent(env, namespace, { tool: call.name, args: call.arguments, ...extra });
+}
+
+// Recent tickets offered to triage as possible duplicates, on top of the
+// fixtures. Every visitor shares one ticket store, so this has to be capped.
+const MAX_TRIAGE_CANDIDATES = 20;
+
+// How far back triage looks for the visitor describing the problem, so "yes,
+// file it" a turn or two after "my screen flickers" is not held.
+const MAX_EARLIER_MESSAGES = 4;
+
+async function listTickets(env: Env): Promise<TriageCandidate[]> {
+	const response = (await postToSubAgent(env, 'ItAgent', { tool: 'list_tickets', args: { limit: MAX_TRIAGE_CANDIDATES } })) as {
+		result?: { tickets?: TriageCandidate[] };
+	};
+	return response.result?.tickets ?? [];
 }
 
 const MAX_ITERATIONS = 5;
@@ -171,19 +203,33 @@ export class ItAgent extends Agent<Env, ItAgentState> {
 					title: body.args.title,
 					status: 'open',
 					assignee: 'unassigned',
+					...(body.triage ? { priority: body.priority ?? null, triage: body.triage } : {}),
 				};
 				this.setState({
 					tickets: { ...this.state.tickets, [id]: ticket },
 					lastTicketId: nextId,
 				});
+				// Priority sits early so the trace's one-line preview shows it.
 				return Response.json({
 					result: {
 						created: true,
 						id,
+						...(ticket.triage ? { priority: ticket.priority } : {}),
 						title: body.args.title,
 						status: 'open' as const,
+						...(ticket.triage ? { triage: ticket.triage } : {}),
 					},
 				});
+			}
+
+			case 'list_tickets': {
+				// The fixtures, then the most recent filed tickets, oldest first.
+				const recent = Object.values(this.state.tickets)
+					.sort((a, b) => Number(b.id) - Number(a.id))
+					.slice(0, body.args.limit)
+					.reverse();
+				const tickets = [...Object.values(FAKE_TICKETS), ...recent].map(({ id, title, status }) => ({ id, title, status }));
+				return Response.json({ result: { tickets } });
 			}
 
 			default: {
@@ -223,13 +269,16 @@ export class Chak extends Agent<Env, ChakState> {
 
 		const newTurn: HistoryEntry[] = [{ role: 'user', content: envelope('user_input', question) }];
 		const messages: unknown[] = [{ role: 'system', content: SYSTEM_PROMPT }, ...this.state.history, ...newTurn];
-		const tools: ToolCallEntry[] = [];
+		// What the loop did, in the order it started: tool calls, each create_ticket
+		// preceded by its triage check.
+		const steps: TraceEntry[] = [];
+		const toolCallsSoFar = () => steps.filter((step): step is ToolCallEntry => step.kind === 'tool');
 
 		// Every exit after this point goes through here, so every response carries
-		// the full trace in the order things ran: the guard, then tool calls, then
-		// the answer check when there is an answer to check.
+		// the full trace in the order things ran: the guard, then the loop's steps,
+		// then the answer check when there is an answer to check.
 		const respond = (body: Record<string, unknown>, status = 200, after: CheckEntry[] = []) =>
-			Response.json({ ...body, trace: [guard, ...tools, ...after] }, { status });
+			Response.json({ ...body, trace: [guard, ...steps, ...after] }, { status });
 
 		try {
 			for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
@@ -250,7 +299,7 @@ export class Chak extends Agent<Env, ChakState> {
 					// context next turn. The check result itself is never added to history.
 					const verification = await runVerifyAnswer(
 						this.env,
-						{ message: question, toolCalls: tools, earlierToolCalls: toolCallsIn(this.state.history), answer: modelAnswer },
+						{ message: question, toolCalls: toolCallsSoFar(), earlierToolCalls: toolCallsIn(this.state.history), answer: modelAnswer },
 						{ instance: this.name },
 					);
 					const replaced = verification.action === 'replaced';
@@ -286,7 +335,7 @@ export class Chak extends Agent<Env, ChakState> {
 						// Malformed tool_call from the model. Feed the error back so the
 						// model can recover instead of 500-ing the whole request.
 						const err = { error: 'invalid tool call arguments (not valid JSON)' };
-						tools.push({ kind: 'tool', tool: call.function.name, args: { raw: call.function.arguments }, result: err, ms: 0 });
+						steps.push({ kind: 'tool', tool: call.function.name, args: { raw: call.function.arguments }, result: err, ms: 0 });
 						const toolEntry: HistoryEntry = {
 							role: 'tool',
 							tool_call_id: call.id,
@@ -296,12 +345,37 @@ export class Chak extends Agent<Env, ChakState> {
 						newTurn.push(toolEntry);
 						continue;
 					}
+					// Triage runs before the ticket exists, so it is stored with the ticket
+					// and the model hears the priority in the result. A failed check files
+					// the ticket untriaged. A ticket for a problem the visitor never
+					// described is held: not filed, and the model is told to ask instead.
+					// Skipped when there is no title, which ItAgent would reject anyway.
+					let extra: Record<string, unknown> = {};
+					let held: unknown = null;
+					if (call.function.name === 'create_ticket' && typeof args.title === 'string' && args.title.length > 0) {
+						const triaged = await runTriageTicket(
+							this.env,
+							{
+								message: question,
+								earlierMessages: userMessagesIn(this.state.history, MAX_EARLIER_MESSAGES),
+								title: args.title,
+								description: typeof args.description === 'string' ? args.description : '',
+								candidates: await listTickets(this.env),
+							},
+							{ instance: this.name },
+						);
+						steps.push(triaged.entry);
+						if (triaged.hold) {
+							console.log(JSON.stringify({ event: 'ticket.held', instance: this.name, rule: triaged.hold }));
+							held = { result: { created: false, error: HELD_RESULT[triaged.hold] } };
+						} else {
+							extra = { triage: triaged.triage, priority: triaged.priority };
+						}
+					}
+
 					const dispatchedAt = Date.now();
-					toolResult = await dispatchTool(this.env, {
-						name: call.function.name,
-						arguments: args,
-					});
-					tools.push({ kind: 'tool', tool: call.function.name, args, result: toolResult, ms: Date.now() - dispatchedAt });
+					toolResult = held ?? (await dispatchTool(this.env, { name: call.function.name, arguments: args }, extra));
+					steps.push({ kind: 'tool', tool: call.function.name, args, result: toolResult, ms: Date.now() - dispatchedAt });
 					const toolEntry: HistoryEntry = {
 						role: 'tool',
 						tool_call_id: call.id,
@@ -335,13 +409,23 @@ function rewriteLegacyPath(request: Request): Request {
 	return new Request(url, request);
 }
 
+// Only the router is public. routeAgentRequest would also serve every other
+// Durable Object binding, so /agents/it-agent/default reached ItAgent directly:
+// past the guard, able to file tickets with a made-up triage, and able to list
+// every ticket. The router reaches ItAgent through its binding, not this route.
+const PUBLIC_PREFIX = '/agents/chak/';
+
 export default {
 	fetch: async (request, env) => {
+		const routed = rewriteLegacyPath(request);
+		if (!new URL(routed.url).pathname.startsWith(PUBLIC_PREFIX)) {
+			return new Response('Not found', { status: 404 });
+		}
 		const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
 		const { success } = await env.RATE_LIMITER.limit({ key: ip });
 		if (!success) {
 			return Response.json({ error: 'Rate limit exceeded. Try again in a minute.' }, { status: 429 });
 		}
-		return (await routeAgentRequest(rewriteLegacyPath(request), env)) ?? new Response('Not found', { status: 404 });
+		return (await routeAgentRequest(routed, env)) ?? new Response('Not found', { status: 404 });
 	},
 } satisfies ExportedHandler<Env>;
