@@ -14,7 +14,9 @@ export type ToolCallEntry = {
 	ms: number;
 };
 
-export type CheckName = 'input_guard';
+// input_guard runs on the question before the model; verify_answer runs on the
+// answer after the loop, so its row is always last.
+export type CheckName = 'input_guard' | 'verify_answer';
 
 export type CheckReason =
 	| 'no_api_key' // skipped: the secret is not configured
@@ -41,8 +43,9 @@ export type CheckEntry = {
 	status: 'ok' | 'skipped' | 'error';
 	reason?: CheckReason;
 	// Set when the Worker acted on the answers instead of only recording them.
-	// Today: the input guard refused the turn before the model ran.
-	action?: 'blocked';
+	// `blocked`: the input guard refused the turn before the model ran.
+	// `replaced`: the answer check found a leak and the visitor got fixed text.
+	action?: 'blocked' | 'replaced';
 	// The versioned model that answered, not the alias that was requested.
 	model?: string;
 	ms: number;
