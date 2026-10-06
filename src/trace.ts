@@ -3,7 +3,21 @@
 // shapes, and an old front end drops the whole trace on a row it does not
 // recognize, so deploy the front end before changing them.
 
-export type TraceEntry = ToolCallEntry | CheckEntry;
+export type TraceEntry = ToolCallEntry | CheckEntry | ApprovalEntry;
+
+// The visitor's decision on a call that waited for their approval (see
+// approval.ts). It sits after the call's triage and before the call itself.
+// `ms` is how long the call waited for the decision.
+export type ApprovalEntry = {
+	kind: 'approval';
+	tool: string;
+	decision: 'approved' | 'cancelled';
+	// The arguments the model proposed.
+	proposed: Record<string, unknown>;
+	// Fields the visitor changed before approving, with their new values.
+	edits?: Record<string, string>;
+	ms: number;
+};
 
 // One tool call the router dispatched. `result` is the raw sub-agent envelope.
 export type ToolCallEntry = {

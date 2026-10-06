@@ -1,4 +1,4 @@
-import { choice, noul } from '@typesafe-ai/sdk';
+import { noul } from '@typesafe-ai/sdk';
 import type { CheckEntry } from '../trace';
 import { runCheck, type CheckSpec } from './run-check';
 
@@ -6,7 +6,7 @@ import { runCheck, type CheckSpec } from './run-check';
 // index.ts: the injection question judges claims of abilities beyond these.
 const ASSISTANT = {
 	name: 'Chak',
-	role: 'Internal helpdesk assistant for the employees of one company. Handles IT, HR, and internal-documentation questions.',
+	role: 'Internal IT helpdesk assistant for the employees of one company. Handles IT support only.',
 	capabilities: ['Look up an existing IT ticket by its id', 'List the IT tickets filed in this conversation', 'Create a new IT ticket'],
 };
 
@@ -26,14 +26,14 @@ const QUESTIONS = {
 				'own passwords or keys, such as resetting or rotating them.',
 		},
 	),
-	in_scope: noul(
-		'Is `message` something an internal workplace helpdesk should handle: IT problems, IT tickets, HR matters, or ' +
-			'questions about internal company documents and policies?',
-		{
-			true: 'A workplace IT, HR, or internal-policy request, including follow-ups about existing tickets.',
-			false: 'General knowledge, personal tasks, coding help, small talk, or anything else unrelated to the employee’s workplace.',
-		},
-	),
+	in_scope: noul('Is `message` something an internal IT helpdesk should handle: a workplace IT problem, IT question, or IT ticket?', {
+		true:
+			'Workplace IT: devices, accounts and passwords, networks and VPN, software, or security practice, including ' +
+			'follow-ups about existing tickets.',
+		false:
+			'Anything that is not workplace IT: HR, leave, pay, benefits, company documents or policies, general knowledge, ' +
+			'personal tasks, coding help, or small talk.',
+	}),
 	credential: noul(
 		'Does `message` contain an actual secret value: a password, passcode, PIN, API key, access token, private key, or recovery code?',
 		{
@@ -41,33 +41,17 @@ const QUESTIONS = {
 			false: 'No secret value appears. Mentioning passwords, or asking for a password reset without including one, is a no.',
 		},
 	),
-	// Phase 4, the front-door router. Recorded only: every tool still goes to the
-	// model. Once HR and Docs sub-agents exist, this picks which tools it sees.
-	// Asked alongside in_scope for now, because BLOCK's off-topic rule reads
-	// in_scope; it replaces in_scope once the eval shows they agree.
-	domain: choice('Which part of the workplace helpdesk is `message` for?', {
-		it: 'IT support: devices, accounts and passwords, networks and VPN, software, or IT tickets (looking one up, listing them, or filing one).',
-		hr: 'HR: leave and vacation, pay, benefits, hiring and onboarding, or the employee’s own employment.',
-		docs: 'Internal documents and policies outside HR: handbooks, expense or travel policy, procedures, or where to find a company document.',
-		general: 'A general question or small talk the assistant can answer briefly without company systems: general knowledge, a greeting, or thanks.',
-		out_of_scope: 'Something a workplace helpdesk should not do: personal tasks, writing code or essays, shopping, or anything unrelated to work.',
-	}),
 };
-
-// The domains a helpdesk sub-agent owns. A message in one of these is
-// helpdesk work, which is what in_scope also asks.
-export const HELPDESK_DOMAINS = ['it', 'hr', 'docs'] as const;
 
 export const INPUT_GUARD: CheckSpec<typeof QUESTIONS> = {
 	name: 'input_guard',
 	questions: QUESTIONS,
 	display: {
 		injection: { above: 0.5 },
-		// Informational, never flagged. "What's the capital of France?" is a
-		// suggested prompt on the page, and flagging it would mislabel the demo.
+		// Informational, never flagged: an off-topic question is not a threat, and
+		// the model declines it in its reply.
 		in_scope: null,
 		credential: { above: 0.5 },
-		domain: null,
 	},
 };
 
@@ -79,9 +63,9 @@ export const INPUT_GUARD: CheckSpec<typeof QUESTIONS> = {
 export const BLOCK = {
 	// A clear attack, whatever it is about. Direct attacks score 0.94–0.99.
 	injectionAbove: 0.9,
-	// Leaning suspicious and not helpdesk work: probing, not a request for help
+	// Leaning suspicious and not IT work: probing, not a request for help
 	// (the fake-tool trick at 0.78 / 0.38, roleplay at 0.86 / 0.03). A suspicious
-	// message that IS helpdesk work still reaches the model, whose system prompt
+	// message that IS IT work still reaches the model, whose system prompt
 	// handles the injected part, because refusing it would refuse the real request.
 	suspiciousAbove: 0.5,
 	offTopicBelow: 0.5,
@@ -114,8 +98,8 @@ export function applyBlockRule(entry: CheckEntry): CheckEntry {
 
 /**
  * Scores the visitor's question for prompt injection, scope, and pasted
- * secrets, labels its domain, and applies the block rules. `credential` and
- * `domain` are recorded only. Never rejects (see runCheck).
+ * secrets, and applies the block rules. `credential` is recorded only. Never
+ * rejects (see runCheck).
  */
 export async function runInputGuard(env: Env, question: string, opts: { instance: string }): Promise<CheckEntry> {
 	const entry = await runCheck(

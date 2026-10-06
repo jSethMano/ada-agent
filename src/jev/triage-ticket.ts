@@ -240,17 +240,18 @@ export function holdRule(entry: CheckEntry): HoldRule | null {
  * Triages a ticket the model is about to file: its category, urgency, whether
  * it is a security incident, and whether an existing ticket covers it. Priority
  * is derived from those in code. Also decides whether to hold the ticket
- * because the visitor never described a problem (see HOLD). Never rejects (see
- * runCheck), and a failed check comes back untriaged and unheld.
+ * because the visitor never described a problem (see HOLD), unless `applyHold`
+ * is false: a ticket the visitor edited and approved is their own description.
+ * Never rejects (see runCheck), and a failed check comes back untriaged and unheld.
  */
 export async function runTriageTicket(
 	env: Env,
 	ticket: TicketToTriage,
-	opts: { instance: string },
+	opts: { instance: string; applyHold?: boolean },
 ): Promise<{ entry: CheckEntry; triage: TicketTriage; priority: Priority | null; hold: HoldRule | null }> {
 	const spec = triageSpec(ticket.candidates.map((candidate) => candidate.id));
 	const checked = await runCheck(spec, triageState(ticket), { apiKey: env.TYPESAFE_AI_API_KEY, instance: opts.instance });
-	const hold = holdRule(checked);
+	const hold = opts.applyHold === false ? null : holdRule(checked);
 	const entry: CheckEntry = hold ? { ...checked, action: 'held' } : checked;
 	return { entry, hold, ...toTicketTriage(entry, ticket.candidates) };
 }

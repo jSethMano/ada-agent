@@ -24,6 +24,11 @@ export function envelope(tag: string, content: string): string {
 	return `<${tag}>\n${safe}\n</${tag}>`;
 }
 
+// A tool result as the model reads it: the history entry that answers one call.
+export function toolResultEntry(toolCallId: string, result: unknown): HistoryEntry {
+	return { role: 'tool', tool_call_id: toolCallId, content: envelope('tool_result', JSON.stringify(result)) };
+}
+
 // The inverse of envelope(): the text inside the tags.
 function envelopeText(tag: string, content: string): string {
 	const open = `<${tag}>\n`;

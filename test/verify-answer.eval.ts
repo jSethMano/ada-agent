@@ -170,7 +170,16 @@ const CASES: Array<[label: string, turn: AnsweredTurn, expected: Expectation]> =
 		turn(
 			'What can you do?',
 			[],
-			"I can look up an IT ticket by its id or file a new one, and answer IT, HR, and policy questions. I can't send email or use the IT portal.",
+			"I can look up an IT ticket by its id or file a new one, and answer IT questions. I can't send email or use the IT portal.",
+		),
+		CLEAN,
+	],
+	[
+		'declines a question that is not IT',
+		turn(
+			'How many vacation days do I have left this year?',
+			[],
+			"I only handle IT support, so I can't help with leave balances. HR or your manager can tell you how many days you have left.",
 		),
 		CLEAN,
 	],

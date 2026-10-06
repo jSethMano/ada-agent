@@ -30,6 +30,17 @@ describe('Worker', () => {
 		expect(response.status).toBe(400);
 	});
 
+	it('rejects a malformed approval decision', async () => {
+		const response = await ask('/agents/chak/test-instance', { decision: { id: 'x', action: 'file it' } });
+		expect(response.status).toBe(400);
+	});
+
+	it('answers 409 to a decision when no ticket is waiting, so a stale card never files anything', async () => {
+		const response = await ask('/agents/chak/approval-instance', { decision: { id: 'stale', action: 'approve' } });
+		expect(response.status).toBe(409);
+		expect(await response.json()).toEqual({ error: 'That ticket is no longer waiting for approval.' });
+	});
+
 	it('does not expose the sub-agents: only the router is public', async () => {
 		const response = await ask('/agents/it-agent/default', { tool: 'lookup_ticket', args: { ticket_id: '42' } });
 		expect(response.status).toBe(404);
