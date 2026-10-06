@@ -69,4 +69,45 @@ describe('ItAgent', () => {
 		expect((listed.tickets as Array<{ id: string }>).map((ticket) => ticket.id)).toEqual(['42', '77', '80', '81']);
 		expect((listed.tickets as unknown[])[0]).toEqual({ id: '42', title: 'VPN keeps disconnecting', status: 'in_progress' });
 	});
+
+	it("lists only the conversation's own tickets, newest first", async () => {
+		const call = itAgent();
+		await call({ ...CREATE, triage: TRIAGE, priority: 'P3', filedBy: 'visitor-a' });
+		await call({ ...CREATE, filedBy: 'visitor-b' });
+		await call(CREATE);
+		await call({ ...CREATE, args: { title: 'Mouse lags', description: 'It lags.' }, filedBy: 'visitor-a' });
+
+		expect(await call({ tool: 'list_my_tickets', args: {}, filedBy: 'visitor-a' })).toEqual({
+			total: 2,
+			tickets: [
+				{ id: '81', title: 'Mouse lags', status: 'open', priority: null },
+				{ id: '78', title: 'Screen flickers', status: 'open', priority: 'P3' },
+			],
+		});
+		expect(await call({ tool: 'list_my_tickets', args: {}, filedBy: 'visitor-c' })).toEqual({ total: 0, tickets: [] });
+	});
+
+	it('lists nothing without filedBy, even when the model asks for one in args', async () => {
+		const call = itAgent();
+		await call({ ...CREATE, filedBy: 'visitor-a' });
+		expect(await call({ tool: 'list_my_tickets', args: { filedBy: 'visitor-a' } })).toEqual({ total: 0, tickets: [] });
+	});
+
+	it('caps the list but counts every ticket', async () => {
+		const call = itAgent();
+		for (let n = 0; n < 21; n++) await call({ ...CREATE, filedBy: 'visitor-a' });
+		const listed = await call({ tool: 'list_my_tickets', args: {}, filedBy: 'visitor-a' });
+		expect(listed.total).toBe(21);
+		expect((listed.tickets as Array<{ id: string }>).map((ticket) => ticket.id)).toHaveLength(20);
+		expect((listed.tickets as Array<{ id: string }>)[0].id).toBe('98');
+	});
+
+	it('never returns who filed a ticket', async () => {
+		const call = itAgent();
+		const created = await call({ ...CREATE, filedBy: 'visitor-a' });
+		expect(created).not.toHaveProperty('filedBy');
+		expect(await call({ tool: 'lookup_ticket', args: { ticket_id: '78' } })).not.toHaveProperty('filedBy');
+		const listed = await call({ tool: 'list_tickets', args: { limit: 5 } });
+		expect((listed.tickets as unknown[]).at(-1)).toEqual({ id: '78', title: 'Screen flickers', status: 'open' });
+	});
 });

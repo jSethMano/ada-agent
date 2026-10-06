@@ -1,4 +1,4 @@
-import { noul } from '@typesafe-ai/sdk';
+import { choice, noul } from '@typesafe-ai/sdk';
 import type { CheckEntry } from '../trace';
 import { runCheck, type CheckSpec } from './run-check';
 
@@ -7,7 +7,7 @@ import { runCheck, type CheckSpec } from './run-check';
 const ASSISTANT = {
 	name: 'Chak',
 	role: 'Internal helpdesk assistant for the employees of one company. Handles IT, HR, and internal-documentation questions.',
-	capabilities: ['Look up an existing IT ticket by its id', 'Create a new IT ticket'],
+	capabilities: ['Look up an existing IT ticket by its id', 'List the IT tickets filed in this conversation', 'Create a new IT ticket'],
 };
 
 const QUESTIONS = {
@@ -41,7 +41,22 @@ const QUESTIONS = {
 			false: 'No secret value appears. Mentioning passwords, or asking for a password reset without including one, is a no.',
 		},
 	),
+	// Phase 4, the front-door router. Recorded only: every tool still goes to the
+	// model. Once HR and Docs sub-agents exist, this picks which tools it sees.
+	// Asked alongside in_scope for now, because BLOCK's off-topic rule reads
+	// in_scope; it replaces in_scope once the eval shows they agree.
+	domain: choice('Which part of the workplace helpdesk is `message` for?', {
+		it: 'IT support: devices, accounts and passwords, networks and VPN, software, or IT tickets (looking one up, listing them, or filing one).',
+		hr: 'HR: leave and vacation, pay, benefits, hiring and onboarding, or the employee’s own employment.',
+		docs: 'Internal documents and policies outside HR: handbooks, expense or travel policy, procedures, or where to find a company document.',
+		general: 'A general question or small talk the assistant can answer briefly without company systems: general knowledge, a greeting, or thanks.',
+		out_of_scope: 'Something a workplace helpdesk should not do: personal tasks, writing code or essays, shopping, or anything unrelated to work.',
+	}),
 };
+
+// The domains a helpdesk sub-agent owns. A message in one of these is
+// helpdesk work, which is what in_scope also asks.
+export const HELPDESK_DOMAINS = ['it', 'hr', 'docs'] as const;
 
 export const INPUT_GUARD: CheckSpec<typeof QUESTIONS> = {
 	name: 'input_guard',
@@ -52,6 +67,7 @@ export const INPUT_GUARD: CheckSpec<typeof QUESTIONS> = {
 		// suggested prompt on the page, and flagging it would mislabel the demo.
 		in_scope: null,
 		credential: { above: 0.5 },
+		domain: null,
 	},
 };
 
@@ -98,8 +114,8 @@ export function applyBlockRule(entry: CheckEntry): CheckEntry {
 
 /**
  * Scores the visitor's question for prompt injection, scope, and pasted
- * secrets, and applies the block rules. `credential` is recorded only.
- * Never rejects (see runCheck).
+ * secrets, labels its domain, and applies the block rules. `credential` and
+ * `domain` are recorded only. Never rejects (see runCheck).
  */
 export async function runInputGuard(env: Env, question: string, opts: { instance: string }): Promise<CheckEntry> {
 	const entry = await runCheck(

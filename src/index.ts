@@ -61,6 +61,18 @@ const TOOLS = [
 			},
 		},
 	},
+	{
+		type: 'function',
+		function: {
+			name: 'list_my_tickets',
+			description:
+				"List the IT tickets filed in this conversation, newest first, with each one's id, title, status, and " +
+				'priority (null when it has none). `total` is how many there are, which can exceed the tickets listed. Use ' +
+				'when the user asks what tickets they have, or means one of theirs without giving its number. Tickets filed ' +
+				'in other conversations are not included; to check one of those, ask the user for its number and use lookup_ticket.',
+			parameters: { type: 'object', properties: {} },
+		},
+	},
 ];
 
 const TOOL_NAMES = TOOLS.map((tool) => tool.function.name);
@@ -74,6 +86,10 @@ type IttTicket = {
 	// before triage existed; null when triage failed.
 	priority?: Priority | null;
 	triage?: TicketTriage;
+	// The Chak instance that filed it, so list_my_tickets can find it. Never
+	// returned: the instance name is the key to that visitor's conversation.
+	// Absent on fixtures and on tickets filed before listing existed.
+	filedBy?: string;
 };
 
 type AIResult = {
@@ -87,16 +103,25 @@ type AIResult = {
 };
 
 // `args` is what the model wrote. Everything else comes from the router: the
-// triage for a new ticket, and `list_tickets`, which the model cannot call
-// (it is not in TOOLS or TOOL_ROUTING).
+// triage for a new ticket, `filedBy` (the conversation filing or listing), and
+// `list_tickets`, which the model cannot call (it is not in TOOLS or
+// TOOL_ROUTING): it lists every visitor's tickets, for triage.
 type ToolRequest =
 	| { tool: 'lookup_ticket'; args: { ticket_id: string } }
-	| { tool: 'create_ticket'; args: { title: string; description: string }; triage?: TicketTriage; priority?: Priority | null }
+	| {
+			tool: 'create_ticket';
+			args: { title: string; description: string };
+			triage?: TicketTriage;
+			priority?: Priority | null;
+			filedBy?: string;
+	  }
+	| { tool: 'list_my_tickets'; args: Record<string, unknown>; filedBy?: string }
 	| { tool: 'list_tickets'; args: { limit: number } };
 
 const TOOL_ROUTING = {
 	lookup_ticket: 'ItAgent',
 	create_ticket: 'ItAgent',
+	list_my_tickets: 'ItAgent',
 } as const;
 
 type ToolName = keyof typeof TOOL_ROUTING;
@@ -143,6 +168,8 @@ const MAX_HISTORY_ENTRIES = 20;
 const MAX_TICKET_ID_LENGTH = 32;
 const MAX_TICKET_TITLE_LENGTH = 200;
 const MAX_TICKET_DESCRIPTION_LENGTH = 4000;
+// Keeps a long-running conversation's list from crowding the model's context.
+const MAX_LISTED_TICKETS = 20;
 
 const FAKE_TICKETS: Record<string, IttTicket> = {
 	'42': { id: '42', title: 'VPN keeps disconnecting', status: 'in_progress', assignee: 'sam@company.com' },
@@ -177,7 +204,8 @@ export class ItAgent extends Agent<Env, ItAgentState> {
 				if (!ticket) {
 					return Response.json({ result: { found: false, ticket_id: ticketId } });
 				}
-				return Response.json({ result: { found: true, ...ticket } });
+				const { filedBy: _filedBy, ...visible } = ticket;
+				return Response.json({ result: { found: true, ...visible } });
 			}
 
 			case 'create_ticket': {
@@ -207,6 +235,7 @@ export class ItAgent extends Agent<Env, ItAgentState> {
 					status: 'open',
 					assignee: 'unassigned',
 					...(body.triage ? { priority: body.priority ?? null, triage: body.triage } : {}),
+					...(typeof body.filedBy === 'string' ? { filedBy: body.filedBy } : {}),
 				};
 				this.setState({
 					tickets: { ...this.state.tickets, [id]: ticket },
@@ -233,6 +262,21 @@ export class ItAgent extends Agent<Env, ItAgentState> {
 					.reverse();
 				const tickets = [...Object.values(FAKE_TICKETS), ...recent].map(({ id, title, status }) => ({ id, title, status }));
 				return Response.json({ result: { tickets } });
+			}
+
+			case 'list_my_tickets': {
+				// Only the tickets this conversation filed, newest first. A request
+				// without filedBy lists none rather than everyone's.
+				const filedBy = body.filedBy;
+				const mine =
+					typeof filedBy === 'string' && filedBy.length > 0
+						? Object.values(this.state.tickets).filter((ticket) => ticket.filedBy === filedBy)
+						: [];
+				const tickets = mine
+					.sort((a, b) => Number(b.id) - Number(a.id))
+					.slice(0, MAX_LISTED_TICKETS)
+					.map(({ id, title, status, priority }) => ({ id, title, status, priority: priority ?? null }));
+				return Response.json({ result: { total: mine.length, tickets } });
 			}
 
 			default: {
@@ -366,7 +410,9 @@ export class Chak extends Agent<Env, ChakState> {
 					// the ticket untriaged. A ticket for a problem the visitor never
 					// described is held: not filed, and the model is told to ask instead.
 					// Skipped when there is no title, which ItAgent would reject anyway.
-					let extra: Record<string, unknown> = {};
+					// `filedBy` is set here, never by the model, so a visitor cannot list
+					// another conversation's tickets. ItAgent ignores it on a lookup.
+					let extra: Record<string, unknown> = { filedBy: this.name };
 					let held: unknown = null;
 					if (call.function.name === 'create_ticket' && typeof args.title === 'string' && args.title.length > 0) {
 						const triaged = await runTriageTicket(
@@ -385,7 +431,7 @@ export class Chak extends Agent<Env, ChakState> {
 							console.log(JSON.stringify({ event: 'ticket.held', instance: this.name, rule: triaged.hold }));
 							held = { result: { created: false, error: HELD_RESULT[triaged.hold] } };
 						} else {
-							extra = { triage: triaged.triage, priority: triaged.priority };
+							extra = { ...extra, triage: triaged.triage, priority: triaged.priority };
 						}
 					}
 
