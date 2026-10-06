@@ -57,6 +57,14 @@ const CASES: Array<[message: string, title: string, description: string, expecte
 		'Ticket 42 is still in progress. Opening a follow-up for the same VPN disconnection issue.',
 		{ category: 'network', related_to: '42', duplicate_of: null },
 	],
+	// The same request without naming the problem: it points at 42 instead.
+	// A real phrasing from the page, where Scout wrote the call as text.
+	[
+		'Check ticket 42, and if it is not resolved open a follow-up',
+		'Follow-up: VPN keeps disconnecting',
+		'Following up on ticket 42, VPN keeps disconnecting',
+		{ category: 'network', related_to: '42', duplicate_of: null },
+	],
 	// A second report of 42's problem, without mentioning 42.
 	[
 		'My VPN drops every few minutes, can you file a ticket?',

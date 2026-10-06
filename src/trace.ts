@@ -12,6 +12,9 @@ export type ToolCallEntry = {
 	args: Record<string, unknown>;
 	result: unknown;
 	ms: number;
+	// The model wrote this call into its reply as text instead of making it, and
+	// the router parsed it out and ran it (see text-tool-call.ts).
+	fromText?: true;
 };
 
 // input_guard runs on the question before the model. triage_ticket runs inside

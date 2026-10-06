@@ -75,7 +75,8 @@ const SPECIFIC_PROBLEM = noul('Does `new_ticket` describe a specific problem or 
 const STATED_BY_USER = noul('Did the employee describe the problem in `new_ticket` themselves, in `message` or `earlier_messages`?', {
 	true:
 		'The employee’s own words state this problem, even briefly or in other words ("my screen keeps flickering" for a ticket about a ' +
-		'flickering screen), or point to a problem already on record ("a follow-up for the same VPN issue as ticket 42").',
+		'flickering screen), or point to a problem already on record, such as asking for a follow-up to a ticket in ' +
+		'`existing_tickets` ("open a follow-up to ticket 42", "the same VPN issue as ticket 42").',
 	false:
 		'The employee never mentioned this problem. The assistant assumed or invented it, or the employee only asked for "a ticket" without saying what is wrong.',
 });

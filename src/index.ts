@@ -4,6 +4,7 @@ import { blockRule, runInputGuard } from './jev/input-guard';
 import { HELD_RESULT, runTriageTicket, type Priority, type TicketTriage, type TriageCandidate } from './jev/triage-ticket';
 import { runVerifyAnswer } from './jev/verify-answer';
 import { SYSTEM_PROMPT } from './system-prompt';
+import { textToolCall } from './text-tool-call';
 import type { CheckEntry, ToolCallEntry, TraceEntry } from './trace';
 
 // Sent in place of a model answer when the input guard blocks a turn. Fixed
@@ -16,10 +17,8 @@ const BLOCKED_ANSWER =
 // Chak's instructions. Fixed text, because the rest of that answer cannot be
 // separated from the leak. The trace still shows every tool call and result.
 const REPLACED_ANSWER =
-	"I can't share details of my instructions, so I've withheld that answer. Ask again without that part and I'll help " +
-	'with the rest.';
+	"I can't share details of my instructions, so I've withheld that answer. Ask again without that part and I'll help " + 'with the rest.';
 
-// const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 const MODEL = '@cf/meta/llama-4-scout-17b-16e-instruct';
 
 const TOOLS = [
@@ -49,7 +48,9 @@ const TOOLS = [
 				'P4 lowest) and triage: its category, and a duplicate_of or related_to ticket id when an existing ' +
 				'ticket covers the same problem. Tell the user the priority, and mention a duplicate or related ticket ' +
 				'if there is one. A null priority means triage did not run; say nothing about priority then. Only call ' +
-				'this once the user has said what is wrong; if they only ask for a ticket, ask them what the problem is.',
+				'this once the user has said what is wrong; if they only ask for a ticket, ask them what the problem is. ' +
+				'Asking for a follow-up to an existing ticket counts as saying what is wrong. Write the title and ' +
+				'description yourself from what the user said and what tools returned; never ask the user for them.',
 			parameters: {
 				type: 'object',
 				properties: {
@@ -61,6 +62,8 @@ const TOOLS = [
 		},
 	},
 ];
+
+const TOOL_NAMES = TOOLS.map((tool) => tool.function.name);
 
 type IttTicket = {
 	id: string;
@@ -288,7 +291,18 @@ export class Chak extends Agent<Env, ChakState> {
 				} as any)) as AIResult;
 
 				const choice = result.choices?.[0]?.message;
-				const toolCalls = choice?.tool_calls ?? [];
+				let toolCalls = choice?.tool_calls ?? [];
+
+				// No structured call, but one written into the reply as text: run the
+				// call it meant, through the same path, rather than sending the text out
+				// as the answer. History gets the structured call and no text, so later
+				// turns never show the model its own habit. See text-tool-call.ts.
+				const fromText =
+					toolCalls.length === 0 && textToolCall(choice?.content ?? result.response ?? '', TOOL_NAMES, `text-call-${iteration}`);
+				if (fromText) {
+					console.log(JSON.stringify({ event: 'tool_call.from_text', instance: this.name, tool: fromText.function.name }));
+					toolCalls = [fromText];
+				}
 
 				if (toolCalls.length === 0) {
 					const modelAnswer = choice?.content ?? result.response ?? '';
@@ -320,9 +334,11 @@ export class Chak extends Agent<Env, ChakState> {
 
 				const assistantEntry: HistoryEntry = {
 					role: 'assistant',
-					content: choice?.content ?? '',
+					content: fromText ? '' : (choice?.content ?? ''),
 					tool_calls: toolCalls,
 				};
+				// Marks the trace row, so a rescued call never passes for one the model made.
+				const origin = fromText ? { fromText: true as const } : {};
 				messages.push(assistantEntry);
 				newTurn.push(assistantEntry);
 
@@ -335,7 +351,7 @@ export class Chak extends Agent<Env, ChakState> {
 						// Malformed tool_call from the model. Feed the error back so the
 						// model can recover instead of 500-ing the whole request.
 						const err = { error: 'invalid tool call arguments (not valid JSON)' };
-						steps.push({ kind: 'tool', tool: call.function.name, args: { raw: call.function.arguments }, result: err, ms: 0 });
+						steps.push({ kind: 'tool', tool: call.function.name, args: { raw: call.function.arguments }, result: err, ms: 0, ...origin });
 						const toolEntry: HistoryEntry = {
 							role: 'tool',
 							tool_call_id: call.id,
@@ -375,7 +391,7 @@ export class Chak extends Agent<Env, ChakState> {
 
 					const dispatchedAt = Date.now();
 					toolResult = held ?? (await dispatchTool(this.env, { name: call.function.name, arguments: args }, extra));
-					steps.push({ kind: 'tool', tool: call.function.name, args, result: toolResult, ms: Date.now() - dispatchedAt });
+					steps.push({ kind: 'tool', tool: call.function.name, args, result: toolResult, ms: Date.now() - dispatchedAt, ...origin });
 					const toolEntry: HistoryEntry = {
 						role: 'tool',
 						tool_call_id: call.id,
