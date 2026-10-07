@@ -141,7 +141,8 @@ export function triageState(ticket: TicketToTriage) {
 
 // Policy, in code so it can change without asking Jev again. A security
 // incident is always the top priority; otherwise urgency rounds to its level,
-// critical (3) to P1 down to minor (0) to P4.
+// critical (3) to P1 down to minor (0) to P4. Mirrored, with the categories,
+// rubric, and hold rules, in the ticket-triage skill (test/skills.spec.ts checks it).
 export const SECURITY_INCIDENT_ABOVE = 0.5;
 
 export function derivePriority(urgency: number, securityIncident: number): Priority {

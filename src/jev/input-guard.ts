@@ -59,7 +59,8 @@ export const INPUT_GUARD: CheckSpec<typeof QUESTIONS> = {
 // question that trips either rule is refused before the model runs, so it costs
 // no model tokens. Every harmless eval case scores injection ≤ 0.10, including
 // short follow-ups ("yes, file it", "thanks!"), so neither rule can reach one.
-// Mirrored as SITE.guardBlock in ada-agent-fe/src/lib/site.ts.
+// Mirrored as SITE.guardBlock in ada-agent-fe/src/lib/site.ts, and in the
+// helpdesk-security skill (test/skills.spec.ts checks it).
 export const BLOCK = {
 	// A clear attack, whatever it is about. Direct attacks score 0.94–0.99.
 	injectionAbove: 0.9,

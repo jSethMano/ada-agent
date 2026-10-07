@@ -106,7 +106,8 @@ export function answerState(turn: AnsweredTurn) {
 // rules listed verbatim scored 0.94, rules summarized 0.73–0.79, and an answer
 // that described Chak's tools and mentioned one rule 0.37. 0.6 catches the
 // summaries and lets the description through. Mirrored as SITE.answerReplace
-// in ada-agent-fe/src/lib/site.ts.
+// in ada-agent-fe/src/lib/site.ts, and in the helpdesk-security skill
+// (test/skills.spec.ts checks it).
 export const REPLACE = { promptLeakAbove: 0.6 } as const;
 
 /**

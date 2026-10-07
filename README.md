@@ -1,0 +1,170 @@
+# ada-agent
+
+**Chak**, an internal IT helpdesk assistant, running as a Cloudflare Worker on the [Agents SDK](https://developers.cloudflare.com/agents/) and Workers AI. Chak answers IT questions, looks up tickets, and files new ones. It files a ticket only after the visitor approves it.
+
+Every turn passes through checks from [TypeSafe](https://docs.typesafe.ai/sdk/javascript)'s Jev model: an input guard before the model runs, triage before a ticket is proposed, and an answer check before the reply goes out. The response includes a trace of everything that ran.
+
+The front end is a separate repo, `ada-agent-fe`.
+
+## How a turn works
+
+```
+POST /agents/chak/{instance}  { "question": "..." }
+        │
+        ├─ rate limit (10 req / 60s per IP)
+        ├─ input_guard (Jev) ── blocked? → fixed refusal, model never runs
+        │
+        ├─ agent loop (Llama 4 Scout, up to 5 passes)
+        │     ├─ lookup_ticket / list_my_tickets → ItAgent
+        │     └─ create_ticket
+        │           ├─ triage_ticket (Jev): category, urgency, priority, duplicates
+        │           ├─ held? → model is told to ask the visitor what's wrong
+        │           └─ otherwise → pause and return the ticket for approval
+        │
+        └─ verify_answer (Jev) ── leaks the system prompt? → fixed replacement text
+```
+
+- **`Chak`** (`src/index.ts`) is the public router Durable Object. Each `{instance}` is one conversation, and its history and any pending approval live in that Durable Object's state.
+- **`ItAgent`** is the ticket store. It is reachable only through Chak's binding; the Worker 404s every path outside `/agents/chak/`.
+- Requests to the old `/agents/ada/` path are rewritten to `/agents/chak/`. This shim will be removed once every client has moved over.
+
+## Tools
+
+| Tool | What it does |
+| --- | --- |
+| `lookup_ticket` | Looks up a ticket by id. Tickets `42` and `77` are seeded fixtures. |
+| `list_my_tickets` | Lists the tickets filed in this conversation, newest first. |
+| `create_ticket` | Proposes a new ticket. The visitor approves, edits, or cancels it before it is filed. |
+
+Ticket ids are sequential, starting at 78.
+
+## Jev checks
+
+All checks live in `src/jev/` and go through `runCheck`, which never throws. With a missing key, a timeout (2s, no retries), or a TypeSafe outage, the check records `skipped` or `error` in the trace and the turn carries on as if it had passed. Jev is pinned to `jev-1.13.0`.
+
+| Check | Runs | Acts when | Records only |
+| --- | --- | --- | --- |
+| `input_guard` | before the model | injection > 0.9, or injection > 0.5 and off-topic → **blocked** | pasted credentials |
+| `triage_ticket` | before each `create_ticket` | no specific problem, or the visitor never described it → **held** | category, urgency, security incident, duplicate/related ticket, priority (P1–P4) |
+| `verify_answer` | after the final answer | `prompt_leak` > 0.6 → **replaced** | unconfirmed actions, facts that contradict or go beyond tool results |
+
+The thresholds are mirrored in `ada-agent-fe/src/lib/site.ts`. Change both together.
+
+## API
+
+All requests are `POST /agents/chak/{instance}` with a JSON body. The instance name is the conversation key, so use an unguessable id per visitor.
+
+**Ask a question**
+
+```json
+{ "question": "My VPN keeps dropping, can you file a ticket?" }
+```
+
+The response is one of:
+
+```jsonc
+// An answer
+{ "answer": "...", "iterations": 2, "trace": [...] }
+
+// A ticket waiting for approval
+{
+  "approval": {
+    "id": "a1b2…",
+    "tool": "create_ticket",
+    "args": { "title": "...", "description": "..." },
+    "priority": "P2",
+    "triage": { ... }
+  },
+  "iterations": 1,
+  "trace": [...]
+}
+```
+
+**Decide on a pending ticket**
+
+```jsonc
+{ "decision": { "id": "a1b2…", "action": "approve" } }
+{ "decision": { "id": "a1b2…", "action": "approve", "args": { "title": "...", "description": "..." } } } // edited, gets triaged again
+{ "decision": { "id": "a1b2…", "action": "cancel" } }
+```
+
+The loop resumes and returns an answer, or another approval. If the visitor sends a new question instead of a decision, the pending ticket is dropped.
+
+**Trace.** Each response's `trace` lists every check, tool call, and approval in the order it ran (see `src/trace.ts`). The front end mirrors these types in `ada-agent-fe/src/lib/api/types.ts`, and an older front end drops the whole trace when it sees a row it doesn't recognize. **Deploy the front end before changing trace shapes.**
+
+**Errors**
+
+| Status | Cause |
+| --- | --- |
+| 400 | Missing question, question over 2000 chars, or a malformed decision |
+| 404 | Path outside `/agents/chak/` |
+| 405 | Not a POST |
+| 409 | Decision for a ticket that is no longer pending |
+| 429 | Rate limit exceeded |
+| 500 | Loop hit the 5-pass limit without answering |
+| 502 | A model or sub-agent call failed mid-turn (the partial trace is still returned) |
+
+## Development
+
+```sh
+npm install
+npm run dev        # wrangler dev
+npm test           # unit tests (no network)
+npm run eval       # live Jev eval cases (needs TYPESAFE_AI_API_KEY)
+npm run cf-typegen # regenerate worker-configuration.d.ts after changing bindings
+npm run deploy
+```
+
+Put the TypeSafe key in a `.env` file at the repo root (it's gitignored). Without it, every Jev check is skipped and Chak runs unguarded.
+
+```sh
+TYPESAFE_AI_API_KEY=...
+```
+
+For production:
+
+```sh
+npx wrangler secret put TYPESAFE_AI_API_KEY
+```
+
+Workers AI runs remotely even under `wrangler dev`, so a full turn needs a Cloudflare login. Unit tests cover only the paths that return before Workers AI or Jev is called. `npm run eval` runs the labeled cases in `test/*.eval.ts` against the live Jev API.
+
+## Claude Skills
+
+`.claude/skills/` holds Claude Skills for developers working on this repo. Claude Code loads them when a task matches, and you can run one directly with `/<name>`. Chak itself never reads them.
+
+**Building Chak.** These are loaded automatically when you change backend code:
+
+| Skill | Use it for |
+| --- | --- |
+| `chak-backend` | House conventions for any change in `src/` or `test/`: where code goes, the model/Jev/code/human split, Durable Object state, errors, logging, mirrored contracts, tests, and a definition of done |
+| `chak-add-tool` | Adding or changing a tool the agent can call: every touchpoint, scoping, approval for consequential actions, tests |
+| `chak-add-jev-check` | Adding or changing a Jev check or question: question writing, display vs enforcement, calibrating lines from evals, wiring |
+
+**Chak's behavior.** These describe what Chak does, so you can reason about it, label eval cases, and review changes:
+
+| Skill | What it does | Mirrors |
+| --- | --- | --- |
+| `helpdesk-agent` | Decides the next step in a helpdesk turn (answer, look up, list, propose a ticket, ask, decline), writes tickets from the user's words, and treats filing as a proposal a human approves. Without ticket tools, it outputs the call it would make and stops. | `system-prompt.ts`, `TOOLS`, `approval.ts` |
+| `ticket-triage` | Hold gate, category, urgency, security incident, P1–P4, duplicate/follow-up links. Returns JSON in Chak's `TicketTriage` shape. | `jev/triage-ticket.ts` |
+| `helpdesk-security` | Screens inbound messages, stored ticket data, and outbound answers for injection, leaks, pasted secrets, and social engineering. Also reviews diffs against Chak's security invariants. | `jev/input-guard.ts`, `jev/verify-answer.ts`, `index.ts` |
+
+The code stays the source of truth. `test/skills.spec.ts` fails when a skill's thresholds or labels drift from the code, when a skill names a file that no longer exists, or when a touchpoint symbol has been renamed.
+
+## Layout
+
+```
+.claude/skills/      Claude Skills: chak-backend, chak-add-tool, chak-add-jev-check,
+                     helpdesk-agent, ticket-triage, helpdesk-security
+src/
+  index.ts           Worker entry, Chak router, ItAgent ticket store
+  system-prompt.ts   Chak's instructions
+  approval.ts        human-in-the-loop pause/resume
+  history.ts         conversation history, envelopes, trimming
+  text-tool-call.ts  recovers tool calls the model writes as text
+  trace.ts           trace types returned to the client
+  jev/               TypeSafe checks: input-guard, triage-ticket, verify-answer, run-check
+test/
+  *.spec.ts          unit tests, including skills.spec.ts (npm test)
+  *.eval.ts          live Jev evals (npm run eval)
+```

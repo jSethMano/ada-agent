@@ -12,7 +12,8 @@ import type { CheckAnswer, CheckEntry, CheckName, CheckReason } from '../trace';
 
 // Pinned rather than `jev-latest`: an alias moves when TypeSafe ships, and the
 // logged probabilities are only comparable within one version. Mirrored as
-// SITE.jevModel in ada-agent-fe/src/lib/site.ts.
+// SITE.jevModel in ada-agent-fe/src/lib/site.ts. The helpdesk-security skill's
+// calibration notes were taken on this version; re-check them when it changes.
 export const JEV_MODEL = 'jev-1.13.0';
 
 // One attempt, no retries. The SDK defaults are 10s per attempt, two retries,
