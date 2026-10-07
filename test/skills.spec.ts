@@ -18,6 +18,7 @@ import triageSkill from '../.claude/skills/ticket-triage/SKILL.md?raw';
 
 const SKILLS = import.meta.glob<string>('../.claude/skills/**/*.md', { query: '?raw', import: 'default', eager: true });
 const SOURCES = import.meta.glob<string>(['../src/**/*.ts', './*.ts'], { query: '?raw', import: 'default', eager: true });
+const AGENTS = import.meta.glob<string>('../.claude/agents/*.md', { query: '?raw', import: 'default', eager: true });
 
 // Repo-relative path as a skill writes it (`src/index.ts`) to its glob key.
 // import.meta.glob never matches the file that calls it, so this one is named.
@@ -56,6 +57,21 @@ describe('every skill', () => {
 		}
 		// The add-tool and add-jev-check tables, so a format change cannot silently skip them.
 		expect(rows).toBeGreaterThanOrEqual(15);
+	});
+});
+
+describe('every agent', () => {
+	// Launched from other repos, an agent reads its skills by path, so a
+	// renamed skill would leave it working without the conventions.
+	it('reads only skill files that exist', () => {
+		let paths = 0;
+		for (const [agent, text] of Object.entries(AGENTS)) {
+			for (const [, path] of text.matchAll(/`([\w-]+\/(?:references\/)?[\w-]+\.md)`/g)) {
+				paths++;
+				expect(SKILLS[`../.claude/skills/${path}`], `${agent} reads ${path}`).toBeDefined();
+			}
+		}
+		expect(paths).toBeGreaterThanOrEqual(5);
 	});
 });
 

@@ -149,11 +149,18 @@ Workers AI runs remotely even under `wrangler dev`, so a full turn needs a Cloud
 | `ticket-triage` | Hold gate, category, urgency, security incident, P1–P4, duplicate/follow-up links. Returns JSON in Chak's `TicketTriage` shape. | `jev/triage-ticket.ts` |
 | `helpdesk-security` | Screens inbound messages, stored ticket data, and outbound answers for injection, leaks, pasted secrets, and social engineering. Also reviews diffs against Chak's security invariants. | `jev/input-guard.ts`, `jev/verify-answer.ts`, `index.ts` |
 
-The code stays the source of truth. `test/skills.spec.ts` fails when a skill's thresholds or labels drift from the code, when a skill names a file that no longer exists, or when a touchpoint symbol has been renamed.
+**Sub-agent.** `.claude/agents/chak-worker-agent.md` is the implementer for this repo, and the only agent that edits it. It reads the skills above by absolute path, so it works when spawned from any session. It never commits or deploys, and never edits the front end. Instead it returns a report with a front-end handoff for `chak-fe-agent`, its counterpart in `ada-agent-fe`. To make it available everywhere, symlink it into your user agents:
+
+```sh
+ln -s "$PWD/.claude/agents/chak-worker-agent.md" ~/.claude/agents/chak-worker-agent.md
+```
+
+The code stays the source of truth. `test/skills.spec.ts` fails when a skill's thresholds or labels drift from the code, when a skill names a file that no longer exists, when a touchpoint symbol has been renamed, or when the sub-agent points at a skill file that no longer exists.
 
 ## Layout
 
 ```
+.claude/agents/      chak-worker-agent, the implementer sub-agent for this repo
 .claude/skills/      Claude Skills: chak-backend, chak-add-tool, chak-add-jev-check,
                      helpdesk-agent, ticket-triage, helpdesk-security
 src/
