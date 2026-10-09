@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+	checkTicketArgs,
 	DROPPED_RESULT,
 	editsBetween,
 	historyAfterDrop,
+	INVALID_TICKET_RESULT,
 	NOT_RUN_RESULT,
 	parseDecision,
 	TICKET_LIMITS,
@@ -69,6 +71,37 @@ describe('parseDecision', () => {
 		const tooLong = 'x'.repeat(TICKET_LIMITS.title + 1);
 		expect(parseDecision({ id: 'a', action: 'approve', args: { title: '   ', description: '' } })).toHaveProperty('error');
 		expect(parseDecision({ id: 'a', action: 'approve', args: { title: tooLong, description: '' } })).toHaveProperty('error');
+	});
+});
+
+describe('checkTicketArgs', () => {
+	it('accepts what ItAgent would file, trimmed', () => {
+		expect(checkTicketArgs({ title: ' VPN drops ', description: ' Every hour. ' })).toEqual({
+			title: 'VPN drops',
+			description: 'Every hour.',
+		});
+		expect(checkTicketArgs({ title: 'VPN drops', description: '' })).toEqual({ title: 'VPN drops', description: '' });
+		const atLimits = { title: 'x'.repeat(TICKET_LIMITS.title), description: 'y'.repeat(TICKET_LIMITS.description) };
+		expect(checkTicketArgs(atLimits)).toEqual(atLimits);
+	});
+
+	it('rejects what ItAgent would reject, and the empty title that used to skip approval', () => {
+		for (const args of [
+			{ title: '', description: 'x' },
+			{ title: '   ', description: 'x' },
+			{ title: 42, description: 'x' },
+			{ title: 'VPN drops' },
+			{ title: 'x'.repeat(TICKET_LIMITS.title + 1), description: 'x' },
+			{ title: 'VPN drops', description: 'y'.repeat(TICKET_LIMITS.description + 1) },
+		]) {
+			expect(checkTicketArgs(args), JSON.stringify(args).slice(0, 60)).toBeNull();
+		}
+	});
+
+	it('tells the model the limits, so it can fix the ticket and call again', () => {
+		expect(INVALID_TICKET_RESULT.result).toMatchObject({ created: false });
+		expect(INVALID_TICKET_RESULT.result.error).toContain(`1-${TICKET_LIMITS.title} characters`);
+		expect(INVALID_TICKET_RESULT.result.error).toContain(String(TICKET_LIMITS.description));
 	});
 });
 

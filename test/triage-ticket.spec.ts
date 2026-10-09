@@ -9,9 +9,28 @@ const CANDIDATES: TriageCandidate[] = [
 ];
 
 function triageWith(
-	over: Partial<{ category: string; urgency: number; security: number; sameIssue: string; relation: string; specific: number; stated: number }> = {},
+	over: Partial<{
+		category: string;
+		urgency: number;
+		security: number;
+		sameIssue: string;
+		relation: string;
+		specific: number;
+		stated: number;
+		secret: number;
+	}> = {},
 ): CheckEntry {
-	const v = { category: 'hardware', urgency: 0.8, security: 0.03, sameIssue: 'none', relation: 'none', specific: 0.97, stated: 0.95, ...over };
+	const v = {
+		category: 'hardware',
+		urgency: 0.8,
+		security: 0.03,
+		sameIssue: 'none',
+		relation: 'none',
+		specific: 0.97,
+		stated: 0.95,
+		secret: 0.02,
+		...over,
+	};
 	return {
 		kind: 'check',
 		check: 'triage_ticket',
@@ -26,6 +45,7 @@ function triageWith(
 			{ id: 'relation', type: 'choice', value: v.relation, confidence: 0.7, probabilities: {}, flagged: false },
 			{ id: 'specific_problem', type: 'noul', value: v.specific, flagged: v.specific < 0.5 },
 			{ id: 'stated_by_user', type: 'noul', value: v.stated, flagged: v.stated < 0.5 },
+			{ id: 'contains_secret', type: 'noul', value: v.secret, flagged: v.secret > 0.5 },
 		],
 	};
 }
@@ -125,9 +145,15 @@ describe('holdRule', () => {
 		expect(holdRule(triageWith())).toBeNull();
 	});
 
-	it('does not hold exactly at either line', () => {
+	it('does not hold exactly at any line', () => {
 		expect(holdRule(triageWith({ specific: HOLD.specificProblemBelow }))).toBeNull();
 		expect(holdRule(triageWith({ stated: HOLD.statedByUserBelow }))).toBeNull();
+		expect(holdRule(triageWith({ secret: HOLD.secretAbove }))).toBeNull();
+	});
+
+	it('holds a ticket whose text carries a pasted secret, first, so it is rewritten even when also vague', () => {
+		expect(holdRule(triageWith({ secret: HOLD.secretAbove + 0.01 }))).toBe('contains_secret');
+		expect(holdRule(triageWith({ secret: 0.97, specific: 0.1 }))).toBe('contains_secret');
 	});
 
 	it('fails open: a check with no answers never holds a ticket', () => {

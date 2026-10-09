@@ -62,16 +62,17 @@ These are security invariants. The full list is in `helpdesk-security/references
 ## 6. Errors and responses
 
 - HTTP errors are `Response.json({ error: '<sentence for a person>' }, { status })`: 400 bad input, 404 unknown path, 405 not POST, 409 stale state, 429 rate limited, 500 loop limit, 502 an upstream call failed mid-turn.
-- Errors the **model** caused go back to the model as a tool result (`{ result: { created: false, error } }`), so it can recover. Don't throw them.
+- Errors the **model** caused go back to the model as a tool result (`{ result: { created: false, error } }`), so it can recover. Don't throw them. So does a sub-agent failure (`unreachableResult`): the visitor is told, and the call stays in the trace.
+- A Workers AI call is retried once for a dropped connection only (`isDroppedConnection`). Never retry a model error.
 - Anything that can fail mid-turn is inside `continueTurn`'s `try`, so the client still gets the partial trace.
 - Jev checks never throw (`runCheck` resolves every outcome), and a check without answers never blocks. Keep new checks fail-open unless you've decided otherwise and written down why.
 
 ## 7. Logging
 
-One JSON line per event: `console.log(JSON.stringify({ event: 'area.verb', instance: this.name, ... }))`. Existing events include `guard.blocked`, `ticket.held`, `approval.requested`, `answer.replaced`, `tool_call.from_text`, `turn.failed`, and `jev.check`.
+One JSON line per event: `console.log(JSON.stringify({ event: 'area.verb', instance: this.name, ... }))`. Existing events include `guard.blocked`, `ticket.held`, `ticket.invalid`, `approval.requested`, `answer.replaced`, `tool_call.from_text`, `tool.failed`, `model.retried`, `turn.failed`, and `jev.check`.
 
 - Never log the visitor's message or a ticket's text. `instance` is enough to join log lines to a conversation.
-- Use `console.error` only for a bug or a misconfiguration (`turn.failed`, a 401 or 422 from Jev), not a bad minute upstream.
+- Use `console.error` only for a bug or a misconfiguration (`turn.failed`, `tool.failed`, a 401 or 422 from Jev), not a bad minute upstream.
 - Truncate error detail (`.slice(0, 300)`).
 
 ## 8. Mirrored contracts
@@ -97,6 +98,7 @@ One JSON line per event: `console.log(JSON.stringify({ event: 'area.verb', insta
 | --- | --- | --- | --- |
 | Unit | `test/*.spec.ts` | `npm test` | Pure functions, `ItAgent` through its binding, routing through `SELF.fetch`. No network |
 | Eval | `test/*.eval.ts` | `npm run eval` | Live Jev on labeled cases. Needs `TYPESAFE_AI_API_KEY` |
+| End to end | `evals/cases.ts`, `test/scripted-cases.harness.ts` | `npm run eval:agent` | Whole turns through the public route, graded from the responses: live cases three times against `wrangler dev`, scripted failures once in the test pool. Needs `wrangler login` and the key. A behavior change updates the matching cases; `test/eval-cases.spec.ts` keeps them in step with the code |
 | By hand | — | `npm run dev` | A full turn: the AI binding is always remote |
 
 Patterns to copy:

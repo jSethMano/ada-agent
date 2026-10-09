@@ -1,5 +1,6 @@
 import { SELF } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import * as worker from '../src/index';
 
 // These cover the paths that return before Workers AI or Jev is called. A full
 // turn needs the remote AI binding, so it is checked by hand against
@@ -50,5 +51,16 @@ describe('Worker', () => {
 		const response = await ask('/agents/ada/test-instance', {});
 		expect(response.status).toBe(400);
 		expect(await response.json()).toEqual({ error: 'Must have a question' });
+	});
+
+	// workerd refuses to start a main module with any other named export
+	// ("Incorrect type for map entry"), and this test pool loads the module in
+	// a way that hides it: an exported constant passed npm test, then broke
+	// wrangler dev.
+	it('exports only the handler and Durable Object classes', () => {
+		for (const [name, value] of Object.entries(worker)) {
+			if (name === 'default') expect(typeof (value as { fetch?: unknown }).fetch, name).toBe('function');
+			else expect(typeof value, name).toBe('function');
+		}
 	});
 });

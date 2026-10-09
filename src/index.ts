@@ -2,14 +2,17 @@ import { Agent, routeAgentRequest } from 'agents';
 import {
 	approvalView,
 	CANCELLED_RESULT,
+	checkTicketArgs,
 	editsBetween,
 	historyAfterDrop,
+	INVALID_TICKET_RESULT,
 	parseDecision,
 	TICKET_LIMITS,
 	type PendingApproval,
 	type TicketArgs,
 	type TurnProgress,
 } from './approval';
+import { isDroppedConnection, unreachableResult } from './failures';
 import { envelope, toolCallsIn, toolResultEntry, trimHistory, userMessagesIn, type HistoryEntry, type OpenAIToolCall } from './history';
 import { blockRule, runInputGuard } from './jev/input-guard';
 import { HELD_RESULT, runTriageTicket, type Priority, type TicketTriage, type TriageCandidate } from './jev/triage-ticket';
@@ -54,14 +57,16 @@ const TOOLS = [
 		function: {
 			name: 'create_ticket',
 			description:
-				'Create a new IT support ticket. Use when the user describes a problem they need IT to fix ' +
-				"and doesn't already have a ticket number. The result includes the ticket's priority (P1 highest, " +
+				'Create a new IT support ticket. Use when the user describes a problem they need IT to fix, or asks for something ' +
+				'only IT staff can do (reset a password, grant access, contact IT), and does not already have a ticket number. Not ' +
+				"for how-to questions: answer those. The result includes the ticket's priority (P1 highest, " +
 				'P4 lowest) and triage: its category, and a duplicate_of or related_to ticket id when an existing ' +
 				'ticket covers the same problem. Tell the user the priority, and mention a duplicate or related ticket ' +
 				'if there is one. A null priority means triage did not run; say nothing about priority then. Only call ' +
 				'this once the user has said what is wrong; if they only ask for a ticket, ask them what the problem is. ' +
 				'Asking for a follow-up to an existing ticket counts as saying what is wrong. Write the title and ' +
-				'description yourself from what the user said and what tools returned; never ask the user for them. ' +
+				'description yourself from what the user said and what tools returned; never ask the user for them, and never ' +
+				'include a password, key, or token they pasted. ' +
 				'The user sees each ticket and approves, edits, or cancels it before it is filed, so call this tool ' +
 				'instead of asking whether to file. If the result says the user cancelled, do not file it again unless they ask.',
 			parameters: {
@@ -153,13 +158,21 @@ async function postToSubAgent(env: Env, namespace: (typeof TOOL_ROUTING)[ToolNam
 	return await res.json();
 }
 
-// `extra` rides alongside the model's arguments, never inside them.
-async function dispatchTool(env: Env, call: ToolCall, extra: Record<string, unknown> = {}): Promise<unknown> {
+// `extra` rides alongside the model's arguments, never inside them. A
+// sub-agent that throws, or answers with something that is not JSON, gives the
+// model an error result instead of failing the turn: the call stays in the
+// trace, and Chak can tell the visitor.
+async function dispatchTool(env: Env, call: ToolCall, extra: Record<string, unknown>, instance: string): Promise<unknown> {
 	const namespace = TOOL_ROUTING[call.name as ToolName];
 	if (!namespace) {
 		return { error: `Unknown tool: ${call.name}` };
 	}
-	return postToSubAgent(env, namespace, { tool: call.name, args: call.arguments, ...extra });
+	try {
+		return await postToSubAgent(env, namespace, { tool: call.name, args: call.arguments, ...extra });
+	} catch (error) {
+		console.error(JSON.stringify({ event: 'tool.failed', instance, tool: call.name, detail: String(error).slice(0, 300) }));
+		return unreachableResult(call.name);
+	}
 }
 
 // Recent tickets offered to triage as possible duplicates, on top of the
@@ -170,11 +183,18 @@ const MAX_TRIAGE_CANDIDATES = 20;
 // file it" a turn or two after "my screen flickers" is not held.
 const MAX_EARLIER_MESSAGES = 4;
 
-async function listTickets(env: Env): Promise<TriageCandidate[]> {
-	const response = (await postToSubAgent(env, 'ItAgent', { tool: 'list_tickets', args: { limit: MAX_TRIAGE_CANDIDATES } })) as {
-		result?: { tickets?: TriageCandidate[] };
-	};
-	return response.result?.tickets ?? [];
+async function listTickets(env: Env, instance: string): Promise<TriageCandidate[]> {
+	try {
+		const response = (await postToSubAgent(env, 'ItAgent', { tool: 'list_tickets', args: { limit: MAX_TRIAGE_CANDIDATES } })) as {
+			result?: { tickets?: TriageCandidate[] };
+		};
+		return response.result?.tickets ?? [];
+	} catch (error) {
+		// Fails open, like the check it feeds: triage still runs, against the
+		// fixtures, which are constants here and always exist in ItAgent.
+		console.error(JSON.stringify({ event: 'tool.failed', instance, tool: 'list_tickets', detail: String(error).slice(0, 300) }));
+		return Object.values(FAKE_TICKETS).map(({ id, title, status }) => ({ id, title, status }));
+	}
 }
 
 const MAX_ITERATIONS = 5;
@@ -401,6 +421,7 @@ export class Chak extends Agent<Env, ChakState> {
 					this.env,
 					{ name: call.function.name, arguments: args },
 					{ filedBy: this.name, triage, priority },
+					this.name,
 				);
 				this.recordToolResult(turn, call, args, result, Date.now() - dispatchedAt, origin);
 			}
@@ -438,10 +459,7 @@ export class Chak extends Agent<Env, ChakState> {
 
 			while (turn.passes < MAX_ITERATIONS) {
 				const iteration = turn.passes;
-				const result = (await this.env.AI.run(MODEL, {
-					messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...this.state.history, ...turn.newTurn],
-					tools: TOOLS,
-				} as any)) as AIResult;
+				const result = await this.runModel(turn);
 				turn.passes++;
 
 				const choice = result.choices?.[0]?.message;
@@ -503,10 +521,29 @@ export class Chak extends Agent<Env, ChakState> {
 
 			return respond({ error: 'Agent loop exceeded max iterations' }, 500);
 		} catch (error) {
-			// A model or sub-agent call threw mid-turn. Without this the exception
+			// A model call threw mid-turn, after any retry. Without this the exception
 			// escapes as a bare 500 and the partial trace is lost.
 			console.error(JSON.stringify({ event: 'turn.failed', instance: this.name, detail: String(error).slice(0, 300) }));
 			return respond({ error: 'Agent turn failed before producing an answer' }, 502);
+		}
+	}
+
+	/**
+	 * One model pass. Sent once more when the connection to Workers AI dropped
+	 * (see isDroppedConnection); any other error ends the turn with a 502.
+	 */
+	private async runModel(turn: TurnProgress): Promise<AIResult> {
+		const request = async () =>
+			(await this.env.AI.run(MODEL, {
+				messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...this.state.history, ...turn.newTurn],
+				tools: TOOLS,
+			} as any)) as AIResult;
+		try {
+			return await request();
+		} catch (error) {
+			if (!isDroppedConnection(error)) throw error;
+			console.log(JSON.stringify({ event: 'model.retried', instance: this.name, detail: String(error).slice(0, 300) }));
+			return await request();
 		}
 	}
 
@@ -531,13 +568,19 @@ export class Chak extends Agent<Env, ChakState> {
 				continue;
 			}
 
+			// A create_ticket is never dispatched from here. Arguments ItAgent would
+			// reject go straight back to the model, with no triage and no card.
 			// Triage runs before the visitor sees the ticket, so the card shows its
-			// priority, and a ticket for a problem the visitor never described is
-			// held: never shown, and the model is told to ask instead. Any other
-			// ticket waits for approval. Skipped when there is no title, which
-			// ItAgent rejects anyway.
-			if (call.function.name === 'create_ticket' && typeof args.title === 'string' && args.title.length > 0) {
-				const ticket = { title: args.title, description: typeof args.description === 'string' ? args.description : '' };
+			// priority, and a ticket that triage holds (no problem the visitor
+			// described, or a pasted secret in its text) is never shown: the model
+			// is told why instead. Any other ticket waits for approval.
+			if (call.function.name === 'create_ticket') {
+				const ticket = checkTicketArgs(args);
+				if (!ticket) {
+					console.log(JSON.stringify({ event: 'ticket.invalid', instance: this.name }));
+					this.recordToolResult(turn, call, args, INVALID_TICKET_RESULT, 0, origin);
+					continue;
+				}
 				const triaged = await this.triageTicket(turn, ticket, true);
 				turn.steps.push(triaged.entry);
 				if (triaged.hold) {
@@ -561,14 +604,14 @@ export class Chak extends Agent<Env, ChakState> {
 			// `filedBy` is set here, never by the model, so a visitor cannot list
 			// another conversation's tickets. ItAgent ignores it on a lookup.
 			const dispatchedAt = Date.now();
-			const result = await dispatchTool(this.env, { name: call.function.name, arguments: args }, { filedBy: this.name });
+			const result = await dispatchTool(this.env, { name: call.function.name, arguments: args }, { filedBy: this.name }, this.name);
 			this.recordToolResult(turn, call, args, result, Date.now() - dispatchedAt, origin);
 		}
 		return null;
 	}
 
 	private triageTicket(turn: TurnProgress, ticket: TicketArgs, applyHold: boolean) {
-		return listTickets(this.env).then((candidates) =>
+		return listTickets(this.env, this.name).then((candidates) =>
 			runTriageTicket(
 				this.env,
 				{

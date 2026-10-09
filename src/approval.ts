@@ -80,6 +80,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+// Both trimmed, as they would be filed.
+function withinLimits({ title, description }: TicketArgs): boolean {
+	return title.length > 0 && title.length <= TICKET_LIMITS.title && description.length <= TICKET_LIMITS.description;
+}
+
+// What the model reads when its create_ticket arguments could never be filed.
+// It can shorten or fix them and call again.
+export const INVALID_TICKET_RESULT = {
+	result: {
+		created: false,
+		error:
+			`Not filed: the title must be 1-${TICKET_LIMITS.title} characters and the description text of at most ` +
+			`${TICKET_LIMITS.description}. Fix them and call create_ticket again.`,
+	},
+};
+
+/**
+ * The model's create_ticket arguments as a ticket, trimmed, or null when
+ * ItAgent would reject them. Checked before triage and the approval card, so
+ * the visitor is never asked to approve a ticket that cannot be filed, and an
+ * empty title no longer skips both. ItAgent still checks them itself.
+ */
+export function checkTicketArgs(args: Record<string, unknown>): TicketArgs | null {
+	if (typeof args.title !== 'string' || typeof args.description !== 'string') return null;
+	const ticket = { title: args.title.trim(), description: args.description.trim() };
+	return withinLimits(ticket) ? ticket : null;
+}
+
 /** The visitor's decision from a request body, or why it is not one. */
 export function parseDecision(raw: unknown): Decision | { error: string } {
 	if (!isRecord(raw) || typeof raw.id !== 'string' || (raw.action !== 'approve' && raw.action !== 'cancel')) {
@@ -90,12 +118,11 @@ export function parseDecision(raw: unknown): Decision | { error: string } {
 	if (!isRecord(args) || typeof args.title !== 'string' || typeof args.description !== 'string') {
 		return { error: 'Edited ticket needs a title and a description.' };
 	}
-	const title = args.title.trim();
-	const description = args.description.trim();
-	if (title.length === 0 || title.length > TICKET_LIMITS.title || description.length > TICKET_LIMITS.description) {
+	const edited = { title: args.title.trim(), description: args.description.trim() };
+	if (!withinLimits(edited)) {
 		return { error: `Title must be 1-${TICKET_LIMITS.title} characters, description up to ${TICKET_LIMITS.description}.` };
 	}
-	return { id: raw.id, action: 'approve', args: { title, description } };
+	return { id: raw.id, action: 'approve', args: edited };
 }
 
 /** The fields the visitor changed, with their new values. Empty when they approved it as proposed. */

@@ -23,6 +23,8 @@
 
 		/* Disable emitting files from a compilation. */
 		"noEmit": true,
+		/* evals/ runs under Node's type stripping, which needs relative imports to name the .ts file. */
+		"allowImportingTsExtensions": true,
 
 		/* Ensure that each file can be safely transpiled without relying on other imports. */
 		"isolatedModules": true,

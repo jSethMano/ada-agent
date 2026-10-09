@@ -1,6 +1,6 @@
 ---
 name: ticket-triage
-description: Triage an IT support issue before a ticket is filed, the way Chak's triage_ticket check does. Hold tickets for problems the user never described, pick a category, rate urgency on a four-level rubric, flag security incidents, derive P1–P4 by a fixed rule, and link duplicates or follow-ups to existing tickets. Returns structured JSON. Use when triaging a helpdesk issue or proposed ticket, labeling triage eval cases, checking a Jev triage result, or changing src/jev/triage-ticket.ts.
+description: Triage an IT support issue before a ticket is filed, the way Chak's triage_ticket check does. Hold tickets for problems the user never described or whose text carries a pasted secret, pick a category, rate urgency on a four-level rubric, flag security incidents, derive P1–P4 by a fixed rule, and link duplicates or follow-ups to existing tickets. Returns structured JSON. Use when triaging a helpdesk issue or proposed ticket, labeling triage eval cases, checking a Jev triage result, or changing src/jev/triage-ticket.ts.
 argument-hint: "[issue or proposed ticket, plus existing tickets if any]"
 ---
 
@@ -28,12 +28,13 @@ Do the steps in order. Steps 2–4 are judgments. Steps 5–7 are fixed rules, s
 
 ### 1. Hold gate (skip if `user_edited`)
 
-Ask two questions. If either answer is no, the ticket is **held**: it isn't filed, and the agent must ask the user what is wrong.
+Ask three questions. If any trips its line, the ticket is **held**: it isn't filed, and the agent is told why.
 
+- **`contains_secret`**: does `new_ticket`'s title or description contain an actual secret value (a password, PIN, API key, token, private key, or recovery code)? "Password Tr0ub4dor&3 stopped working" is a yes. Writing *about* one is not: "password reset request", "needs a new API key", "MFA codes not arriving", a username, an error code, a hostname. Yes above 0.5 → hold `contains_secret`, and the agent rewrites the ticket without it. Checked first.
 - **`specific_problem`**: does `new_ticket` describe a specific problem or request IT could act on? "Monitor flickers when docked" is a yes. "New ticket request" and "User wants a ticket created" are placeholders, so no → hold `no_problem`.
 - **`stated_by_user`**: did the user describe *this* problem themselves, in `message` or `earlier_messages`? Different wording counts. So does pointing at a ticket already on record ("open a follow-up to 42"). If the agent assumed or invented the problem, or swapped in a different one, the answer is no → hold `not_stated`.
 
-The gate needs two questions because a placeholder ticket ("User requested a ticket") is literally what the user asked for, and a single "did they describe it?" question would let it through.
+For the last two, the agent must ask the user what is wrong. They are two questions because a placeholder ticket ("User requested a ticket") is literally what the user asked for, and a single "did they describe it?" question would let it through.
 
 ### 2. Category
 

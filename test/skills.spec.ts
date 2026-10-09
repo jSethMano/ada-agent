@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { CANCELLED_RESULT, TICKET_LIMITS } from '../src/approval';
 import { BLOCK, blockRule } from '../src/jev/input-guard';
 import { JEV_MODEL } from '../src/jev/run-check';
-import { derivePriority, HELD_RESULT, holdRule, SECURITY_INCIDENT_ABOVE, triageSpec } from '../src/jev/triage-ticket';
+import { derivePriority, HELD_RESULT, HOLD, holdRule, SECURITY_INCIDENT_ABOVE, triageSpec } from '../src/jev/triage-ticket';
 import { REPLACE } from '../src/jev/verify-answer';
 import { SYSTEM_PROMPT } from '../src/system-prompt';
 import type { CheckEntry } from '../src/trace';
@@ -96,6 +96,8 @@ describe('helpdesk-agent skill', () => {
 		expect(HELD_RESULT.not_stated).toContain('has not described this problem');
 		expect(agentSkill).toContain('"has not said what is wrong"');
 		expect(agentSkill).toContain('"has not described this problem"');
+		expect(HELD_RESULT.contains_secret).toContain('contains a secret the user pasted');
+		expect(agentSkill).toContain('"contains a secret the user pasted"');
 	});
 });
 
@@ -137,11 +139,17 @@ describe('ticket-triage skill', () => {
 	});
 
 	it('names the hold rules the code applies', () => {
-		const hold = (specific: number, stated: number) => holdRule(checked({ specific_problem: specific, stated_by_user: stated }));
+		const hold = (specific: number, stated: number, secret = 0) =>
+			holdRule(checked({ specific_problem: specific, stated_by_user: stated, contains_secret: secret }));
 		expect(hold(0.1, 0.9)).toBe('no_problem');
 		expect(hold(0.9, 0.1)).toBe('not_stated');
+		expect(hold(0.9, 0.9, HOLD.secretAbove + 0.01)).toBe('contains_secret');
 		expect(triageSkill).toContain('hold `no_problem`');
 		expect(triageSkill).toContain('hold `not_stated`');
+		expect(triageSkill).toContain(`above ${HOLD.secretAbove} → hold \`contains_secret\``);
+		expect(securitySkill).toContain(
+			`\`contains_secret\` question backs it up: a proposed ticket whose text holds a secret value (above ${HOLD.secretAbove})`,
+		);
 	});
 });
 

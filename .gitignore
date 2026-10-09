@@ -165,3 +165,6 @@ dist
 .env*
 !.env.example
 .wrangler/
+
+# Worker logs from npm run eval:agent. The results JSON and report are the evidence.
+evals/results/*.wrangler.log
