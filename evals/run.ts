@@ -47,6 +47,7 @@ const { values: flags } = parseArgs({
 		rep: { type: 'string' },
 		'live-from': { type: 'string' },
 		resume: { type: 'string' },
+		out: { type: 'string' },
 		rejudge: { type: 'boolean', default: false },
 		help: { type: 'boolean', default: false },
 	},
@@ -62,6 +63,7 @@ if (flags.help) {
   --rep N           with --regrade or --live-from: keep live repetition N only, for a run
                     whose other repetitions are unusable (the header says so)
   --rejudge         with --regrade: label every saved answer again with the current judge
+  --out FILE        with --regrade: write here instead of next to the input
   --live-from FILE  take the live runs from a .partial.json a run left behind, instead
                     of sending them again; scripted cases still run, and answers are judged
   --resume FILE     finish a run that stopped after its requests: take every run from its
@@ -73,6 +75,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function git(args: string[]): string {
 	return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
+}
+
+// Whether the code under test differs from the commit. Taken when the run
+// starts, and blind to evals/results/: the run's own files made iteration 2's
+// header say "dirty tree" for a clean checkout.
+function dirtyTree(): boolean {
+	return git(['status', '--porcelain', '--', '.', ':!evals/results']).length > 0;
 }
 
 // Read off the source, so the header names the model the Worker calls.
@@ -199,7 +208,7 @@ type Incomplete = NonNullable<ResultsMeta['incomplete']>;
 // What a run has done so far, written after every case, so nothing it holds
 // in memory can be lost (iteration 1 lost its scripted results to a crash).
 // `--resume` finishes a run from it.
-type Checkpoint = { startedAt: string; commit: string; reps: number; runs: CaseRun[]; incomplete?: Incomplete };
+type Checkpoint = { startedAt: string; commit: string; dirty: boolean; reps: number; runs: CaseRun[]; incomplete?: Incomplete };
 
 // The Worker's log is kept beside the results, but not committed: it holds no
 // visitor text (src never logs it), and it is the only record of why a turn
@@ -359,7 +368,7 @@ function save(results: Results, path: string) {
 	}
 }
 
-type RunShape = { startedAt: string; commit: string; reps: number; live: number; scripted: number; filter?: string };
+type RunShape = { startedAt: string; commit: string; dirty: boolean; reps: number; live: number; scripted: number; filter?: string };
 
 function metaFor(run: RunShape): ResultsMeta {
 	const finished = new Date();
@@ -367,7 +376,7 @@ function metaFor(run: RunShape): ResultsMeta {
 		startedAt: run.startedAt,
 		finishedAt: finished.toISOString(),
 		commit: run.commit,
-		dirty: git(['status', '--porcelain']).length > 0,
+		dirty: run.dirty,
 		model: workerModel(),
 		jevModel: JEV_MODEL,
 		judge: { model: JUDGE_MODEL, floor: JUDGE_FLOOR, version: JUDGE_VERSION },
@@ -410,7 +419,7 @@ async function main() {
 		}
 		const suffix =
 			[flags.rejudge && 'rejudged', flags.rep && `rep${flags.rep}`, flags.cases && 'subset'].filter(Boolean).join('-') || 'regraded';
-		save(grade(meta, runs), flags.regrade.replace(/\.json$/, `-${suffix}.json`));
+		save(grade(meta, runs), flags.out ?? flags.regrade.replace(/\.json$/, `-${suffix}.json`));
 		return;
 	}
 
@@ -423,6 +432,8 @@ async function main() {
 		const count = (harness: string) => new Set(saved.runs.filter((run) => run.harness === harness).map((run) => run.caseId)).size;
 		const meta = metaFor({
 			...saved,
+			// Absent on checkpoints written before the flag was taken at the start.
+			dirty: saved.dirty ?? dirtyTree(),
 			live: count('live'),
 			scripted: count('scripted'),
 			filter: `resumed from ${flags.resume.split('/').at(-1)}`,
@@ -436,6 +447,7 @@ async function main() {
 
 	const started = new Date();
 	const commit = git(['rev-parse', '--short', 'HEAD']);
+	const dirty = dirtyTree();
 	const stamp = started
 		.toISOString()
 		.replace(/[-:]/g, '')
@@ -452,7 +464,7 @@ async function main() {
 	if (!apiKey) console.log('No TypeSafe key: Jev checks are skipped and answers go unjudged.');
 
 	const liveFrom = flags['live-from'];
-	const progress: Checkpoint = { startedAt: started.toISOString(), commit, reps: liveFrom && flags.rep ? 1 : reps, runs: [] };
+	const progress: Checkpoint = { startedAt: started.toISOString(), commit, dirty, reps: liveFrom && flags.rep ? 1 : reps, runs: [] };
 	const write = () => writeFileSync(checkpointPath, JSON.stringify(progress, null, 1));
 
 	if (scripted.length > 0) {

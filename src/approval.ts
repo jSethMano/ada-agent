@@ -7,6 +7,7 @@
 // drops the waiting ticket.
 
 import { toolResultEntry, trimHistory, type HistoryEntry, type OpenAIToolCall } from './history';
+import { SECRET_NOTICE, sharedSecret } from './secret-notice';
 import type { Priority, TicketTriage } from './jev/triage-ticket';
 import type { CheckEntry, TraceEntry } from './trace';
 
@@ -66,6 +67,7 @@ export const DROPPED_RESULT = {
 export const NOT_RUN_RESULT = { error: 'Not run: the turn ended before this call.' };
 
 // The waiting ticket as the client sees it: no history and no call ids.
+// `notice` is set only when the visitor pasted a secret this turn.
 export function approvalView(pending: PendingApproval) {
 	return {
 		id: pending.id,
@@ -73,6 +75,7 @@ export function approvalView(pending: PendingApproval) {
 		args: pending.args,
 		priority: pending.priority,
 		triage: pending.triage,
+		...(sharedSecret(pending.turn.guard, pending.turn.steps) ? { notice: SECRET_NOTICE } : {}),
 	};
 }
 

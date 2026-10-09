@@ -30,6 +30,7 @@ Severity: **critical** (a visitor can act or read beyond their conversation, or 
 - Only structured tool calls act. Recovering a call written as text is strict: an exact tool name, and arguments that fully parse. A tool name mentioned in prose is never a call. (`src/text-tool-call.ts`)
 - Malformed JSON arguments go back to the model as an error result instead of throwing. Unknown tools get an error result. So does a sub-agent that throws or answers with something that is not JSON (`unreachableResult`, `src/failures.ts`): the call stays in the trace, and the turn does not 502.
 - A Workers AI call is retried once, and only for a dropped connection (`isDroppedConnection`). Model errors are never retried.
+- A `lookup_ticket` whose `ticket_id` has no digit is answered by the router, never sent to `ItAgent` (`isTicketNumber`, `src/tool-guards.ts`). Calls parsed from text take the same path.
 - `ItAgent` validates every argument itself: `ticket_id` at most 32 chars, a title of 1–200 chars, a description of at most 4000 chars. The router checks `create_ticket` arguments against the same limits before triage (`checkTicketArgs`), and an edited decision is held to them by `parseDecision`. (`TICKET_LIMITS`, `src/approval.ts`)
 - The loop is capped at `MAX_ITERATIONS` model passes per turn, including both sides of a pause.
 

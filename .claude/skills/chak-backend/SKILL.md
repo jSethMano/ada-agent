@@ -69,7 +69,7 @@ These are security invariants. The full list is in `helpdesk-security/references
 
 ## 7. Logging
 
-One JSON line per event: `console.log(JSON.stringify({ event: 'area.verb', instance: this.name, ... }))`. Existing events include `guard.blocked`, `ticket.held`, `ticket.invalid`, `approval.requested`, `answer.replaced`, `tool_call.from_text`, `tool.failed`, `model.retried`, `turn.failed`, and `jev.check`.
+One JSON line per event: `console.log(JSON.stringify({ event: 'area.verb', instance: this.name, ... }))`. Existing events include `guard.blocked`, `ticket.held`, `ticket.invalid`, `approval.requested`, `answer.replaced`, `tool_call.from_text`, `tool.failed`, `tool.rejected`, `model.retried`, `turn.failed`, and `jev.check`.
 
 - Never log the visitor's message or a ticket's text. `instance` is enough to join log lines to a conversation.
 - Use `console.error` only for a bug or a misconfiguration (`turn.failed`, `tool.failed`, a 401 or 422 from Jev), not a bad minute upstream.

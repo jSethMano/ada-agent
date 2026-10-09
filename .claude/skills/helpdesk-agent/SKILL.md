@@ -101,6 +101,7 @@ Ask one question at a time, and never ask the user to write the ticket's title o
 | `create_ticket` → `created: false` with "contains a secret the user pasted" | Triage held it. Write the ticket again without the secret, call `create_ticket` again, and tell the user to change it |
 | `create_ticket` → `created: false` with "the title must be" | The arguments were rejected before triage. Fix them and call again |
 | A result with "the ticket system could not be reached" | Nothing ran. Say so and suggest trying again; never guess the result |
+| `lookup_ticket` → "that is not a ticket number" | The router refused a placeholder id. Ask for the ticket number. Never call a tool with a placeholder or guessed value |
 | Any other `created: false` or `error` | That it didn't work. Never claim success |
 
 ## Hard rules

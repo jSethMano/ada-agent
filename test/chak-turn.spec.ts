@@ -83,6 +83,31 @@ describe('create_ticket arguments', () => {
 	});
 });
 
+describe('a lookup with no ticket number in it', () => {
+	it('is answered by the router, never sent to ItAgent, and the model is told to ask', async () => {
+		// The failing ItAgent proves it: a dispatched lookup would come back unreachable.
+		const turn = await chak([toolCall('lookup_ticket', { ticket_id: '?' }), text('What is your ticket number?')], { failItAgent: true });
+		const { status, body } = await turn.send({ question: 'Is my ticket done?' });
+		expect(status).toBe(200);
+		const [lookup] = rows(body, 'tool');
+		expect(lookup).toMatchObject({ tool: 'lookup_ticket', args: { ticket_id: '?' }, result: { result: { found: false } } });
+		expect(lookup.result.result.error).toContain('not a ticket number');
+		expect(body.notice).toBeUndefined();
+	});
+
+	it('gets the same answer when the call was written as text', async () => {
+		const turn = await chak([text('[lookup_ticket(ticket_id="user\'s ticket ID")]'), text('What is your ticket number?')], {
+			failItAgent: true,
+		});
+		const { status, body } = await turn.send({ question: 'Is my ticket done?' });
+		expect(status).toBe(200);
+		const [lookup] = rows(body, 'tool');
+		expect(lookup).toMatchObject({ tool: 'lookup_ticket', fromText: true, result: { result: { found: false } } });
+		expect(lookup.result.result.error).toContain('not a ticket number');
+		expect(body.answer).toBe('What is your ticket number?');
+	});
+});
+
 describe('a ticket store that cannot be reached', () => {
 	it('gives the model an error result and keeps the call in the trace, instead of a 502', async () => {
 		const turn = await chak([toolCall('lookup_ticket', { ticket_id: '42' }), text('The ticket system is unavailable.')], {

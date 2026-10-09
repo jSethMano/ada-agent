@@ -397,6 +397,30 @@ describe('approval', () => {
 		expect(failing(gradeCase(testCase, runOf([pause, decide([approved(TICKET), triage(), filed])])))).toEqual(['decision_row']);
 	});
 
+	it('checks the card notice, and leaves it ungraded when no Jev check ran', () => {
+		const pause = (row: CheckEntry, notice?: string): StepRun => ({
+			request: { question: 'q' },
+			status: 200,
+			body: {
+				approval: { id: 'a', tool: 'create_ticket', args: TICKET, priority: 'P3', triage: TRIAGED, ...(notice ? { notice } : {}) },
+				iterations: 1,
+				trace: [row, triage(row.status)],
+			},
+			ms: 1,
+			attempts: 1,
+			prefix: 0,
+		});
+		const expectNotice: StepExpectation = { outcome: 'awaiting_approval', approval: { notice: { includesAny: ['Change it'] } } };
+		const notice = (run: StepRun) =>
+			gradeCase(oneStep(expectNotice), runOf([run])).steps[0].checks.find((c) => c.name === 'approval notice');
+		expect(notice(pause(guard(), 'You shared a password. Change it.'))?.pass).toBe(true);
+		expect(notice(pause(guard()))?.pass).toBe(false);
+		expect(notice(pause(guard(undefined, 'skipped')))?.pass).toBeNull();
+		expect(responseProblems(200, pause(guard(), 'x').body)).toEqual([]);
+		expect(responseProblems(200, { answer: 'a', iterations: 0, notice: 'x', trace: [guard('blocked')] })).toEqual([]);
+		expect(responseProblems(200, { answer: 'a', iterations: 0, notice: 7, trace: [guard('blocked')] })).toContain('notice');
+	});
+
 	it('leaves a triage judgment ungraded when triage did not run, but grades a null priority', () => {
 		const pause = (row: CheckEntry, priority: string | null): StepRun => ({
 			request: { question: 'q' },

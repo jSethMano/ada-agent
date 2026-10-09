@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	approvalView,
 	checkTicketArgs,
 	DROPPED_RESULT,
 	editsBetween,
@@ -11,6 +12,7 @@ import {
 	type PendingApproval,
 } from '../src/approval';
 import { toolCallsIn, toolResultEntry, type HistoryEntry, type OpenAIToolCall } from '../src/history';
+import { SECRET_NOTICE } from '../src/secret-notice';
 
 function call(id: string, name: string, args: Record<string, unknown>): OpenAIToolCall {
 	return { id, type: 'function', function: { name, arguments: JSON.stringify(args) } };
@@ -71,6 +73,22 @@ describe('parseDecision', () => {
 		const tooLong = 'x'.repeat(TICKET_LIMITS.title + 1);
 		expect(parseDecision({ id: 'a', action: 'approve', args: { title: '   ', description: '' } })).toHaveProperty('error');
 		expect(parseDecision({ id: 'a', action: 'approve', args: { title: tooLong, description: '' } })).toHaveProperty('error');
+	});
+});
+
+describe('approvalView', () => {
+	it('carries the secret notice only when the visitor pasted one', () => {
+		const plain = pendingWith();
+		expect(approvalView(plain)).not.toHaveProperty('notice');
+		const shared = pendingWith();
+		shared.turn.guard = {
+			kind: 'check',
+			check: 'input_guard',
+			status: 'ok',
+			ms: 300,
+			answers: [{ id: 'credential', type: 'noul', value: 0.97, flagged: true }],
+		};
+		expect(approvalView(shared)).toMatchObject({ args: PROPOSED, notice: SECRET_NOTICE });
 	});
 });
 

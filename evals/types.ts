@@ -152,6 +152,8 @@ export type ApprovalMatch = {
 	// `as` left out accepts either. Only ever a fixture: every other ticket in
 	// the store depends on what ran before.
 	link?: { to: FixtureId; as?: 'duplicate_of' | 'related_to' };
+	// The card's fixed `notice`, set when the visitor pasted a secret (SECRET_NOTICE).
+	notice?: TextMatch;
 };
 
 export type AnswerMatch = {

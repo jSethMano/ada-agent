@@ -17,8 +17,10 @@ import { envelope, toolCallsIn, toolResultEntry, trimHistory, userMessagesIn, ty
 import { blockRule, runInputGuard } from './jev/input-guard';
 import { HELD_RESULT, runTriageTicket, type Priority, type TicketTriage, type TriageCandidate } from './jev/triage-ticket';
 import { runVerifyAnswer } from './jev/verify-answer';
+import { SECRET_NOTICE, sharedSecret } from './secret-notice';
 import { SYSTEM_PROMPT } from './system-prompt';
 import { textToolCall } from './text-tool-call';
+import { isTicketNumber, NOT_A_TICKET_NUMBER_RESULT } from './tool-guards';
 import type { CheckEntry, ToolCallEntry } from './trace';
 
 // Sent in place of a model answer when the input guard blocks a turn. Fixed
@@ -355,7 +357,8 @@ export class Chak extends Agent<Env, ChakState> {
 			// Not written to history, so the attempt does not become context for the
 			// next turn in this conversation. `iterations: 0`: the model never ran.
 			console.log(JSON.stringify({ event: 'guard.blocked', instance: this.name, rule: blockRule(guard) }));
-			return Response.json({ answer: BLOCKED_ANSWER, iterations: 0, trace: [guard] });
+			const notice = sharedSecret(guard, []) ? { notice: SECRET_NOTICE } : {};
+			return Response.json({ answer: BLOCKED_ANSWER, iterations: 0, ...notice, trace: [guard] });
 		}
 
 		return this.continueTurn({
@@ -507,7 +510,10 @@ export class Chak extends Agent<Env, ChakState> {
 						pending: null,
 					});
 
-					return respond({ answer, iterations: turn.passes }, 200, [verification]);
+					// A turn that showed an approval card already gave the notice there.
+					const carded = turn.steps.some((step) => step.kind === 'approval');
+					const notice = !carded && sharedSecret(turn.guard, turn.steps) ? { notice: SECRET_NOTICE } : {};
+					return respond({ answer, iterations: turn.passes, ...notice }, 200, [verification]);
 				}
 
 				turn.newTurn.push({
@@ -599,6 +605,15 @@ export class Chak extends Agent<Env, ChakState> {
 					turn,
 					pausedAt: Date.now(),
 				};
+			}
+
+			// A lookup with no ticket number in it is a placeholder or a guess: it is
+			// answered here, without reaching ItAgent, and the model is told to ask.
+			// Calls parsed from text take this path too.
+			if (call.function.name === 'lookup_ticket' && !isTicketNumber(args.ticket_id)) {
+				console.log(JSON.stringify({ event: 'tool.rejected', instance: this.name, tool: call.function.name }));
+				this.recordToolResult(turn, call, args, NOT_A_TICKET_NUMBER_RESULT, 0, origin);
+				continue;
 			}
 
 			// `filedBy` is set here, never by the model, so a visitor cannot list

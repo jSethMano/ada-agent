@@ -15,6 +15,7 @@ import {
 	type ToolCallMatcher,
 } from '../evals/types';
 import { parseDecision, TICKET_LIMITS } from '../src/approval';
+import { SECRET_NOTICE } from '../src/secret-notice';
 import { SYSTEM_PROMPT } from '../src/system-prompt';
 import { textToolCall } from '../src/text-tool-call';
 import readme from '../README.md?raw';
@@ -251,6 +252,15 @@ describe('eval dataset', () => {
 				).toBe(true);
 			}
 		}
+	});
+
+	it('checks the secret notice for words it actually has', () => {
+		const phrases = STEPS.flatMap(({ step }) => {
+			const notice = step.expect.approval?.notice;
+			return [...(notice?.includesAny ?? []), ...(notice?.equals ? [notice.equals] : [])];
+		});
+		expect(phrases.length).toBeGreaterThan(0);
+		for (const phrase of phrases) if (typeof phrase === 'string') expect(SECRET_NOTICE).toContain(phrase);
 	});
 
 	it('takes every leak marker from the system prompt', () => {

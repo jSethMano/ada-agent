@@ -83,8 +83,9 @@ All requests are `POST /agents/chak/{instance}` with a JSON body. The instance n
 The response is one of:
 
 ```jsonc
-// An answer
-{ "answer": "...", "iterations": 2, "trace": [...] }
+// An answer. `notice` is fixed advice to change a secret the visitor pasted,
+// present only then (also on `approval` when the turn shows a card).
+{ "answer": "...", "iterations": 2, "notice": "...", "trace": [...] }
 
 // A ticket waiting for approval
 {

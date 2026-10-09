@@ -249,7 +249,9 @@ export function responseProblems(status: number, body: unknown): string[] {
 		Array.isArray(body.trace) ? body.trace.flatMap((row, index) => traceRowProblems(row).map((p) => `trace[${index}]: ${p}`)) : ['trace'];
 	if (status === 200) {
 		const iterations = Number.isInteger(body.iterations) && Number(body.iterations) >= 0 ? [] : ['iterations'];
-		if (typeof body.answer === 'string') return [...iterations, ...rows(), ...extraKeys(body, ['answer', 'iterations', 'trace'])];
+		const notice = body.notice === undefined || typeof body.notice === 'string' ? [] : ['notice'];
+		if (typeof body.answer === 'string')
+			return [...iterations, ...notice, ...rows(), ...extraKeys(body, ['answer', 'iterations', 'notice', 'trace'])];
 		const approval = body.approval;
 		if (!isRecord(approval)) return ['200 without answer or approval'];
 		const args = approval.args;
@@ -258,7 +260,8 @@ export function responseProblems(status: number, body: unknown): string[] {
 			...(isRecord(args) && typeof args.title === 'string' && typeof args.description === 'string' ? [] : ['approval args']),
 			...(approval.priority === null || PRIORITIES.includes(String(approval.priority)) ? [] : ['approval priority']),
 			...triageProblems(approval.triage).map((p) => `approval ${p}`),
-			...extraKeys(approval, ['id', 'tool', 'args', 'priority', 'triage']).map((key) => `approval key ${key}`),
+			...(approval.notice === undefined || typeof approval.notice === 'string' ? [] : ['approval notice']),
+			...extraKeys(approval, ['id', 'tool', 'args', 'priority', 'triage', 'notice']).map((key) => `approval key ${key}`),
 		];
 		return [...problems, ...iterations, ...rows(), ...extraKeys(body, ['approval', 'iterations', 'trace'])];
 	}
@@ -503,6 +506,13 @@ function approvalChecks(match: ApprovalMatch, body: Row, rows: unknown[], ctx: C
 		const pass = as ? triage[as] === to : triage.duplicate_of === to || triage.related_to === to;
 		const detail = `duplicate_of ${String(triage.duplicate_of)}, related_to ${String(triage.related_to)}`;
 		checks.push(check(`approval link to ${to}`, ['triage'], judged ? pass : null, judged ? detail : ungraded));
+	}
+	if (match.notice) {
+		// The notice rests on Jev (the guard's credential, or a triage hold), so
+		// it is graded only when one of them ran.
+		const ran = [...checkRows(rows, 'input_guard'), ...checkRows(rows, 'triage_ticket')].some((row) => row.status === 'ok');
+		const { pass, detail } = textMatch(approval.notice, match.notice, ctx.captures);
+		checks.push(check('approval notice', ['safety'], ran ? pass : null, ran ? detail : 'no Jev check ran'));
 	}
 	return checks;
 }
