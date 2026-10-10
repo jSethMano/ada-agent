@@ -2,7 +2,7 @@
 // results object it is given, which the runner reads back from disk.
 
 import type { CaseRun } from './drive.ts';
-import type { CaseGrade, Metric, Summary, Tally } from './grade.ts';
+import { METRIC_INFO, type CaseGrade, type Metric, type Summary, type Tally } from './grade.ts';
 import type { EvalCase } from './types.ts';
 
 export type ResultsMeta = {
@@ -23,6 +23,9 @@ export type ResultsMeta = {
 	// Set by --regrade: when the saved runs were graded again, with the dataset
 	// and grader of that moment. The responses are the original run's.
 	regradedAt?: string;
+	// Which grader and which labels produced `grades`: GRADER_VERSION and the
+	// dataset's fingerprint. Results are compared only when these match.
+	grading?: { grader: number; dataset: string };
 	// Set when something outside the Worker stopped the run early, such as the
 	// Workers AI daily quota. `excluded` runs were cut short and are not graded;
 	// `notRun` were never sent.
@@ -30,19 +33,6 @@ export type ResultsMeta = {
 };
 
 export type Results = { meta: ResultsMeta; runs: CaseRun[]; grades: CaseGrade[]; summary: Summary };
-
-const METRIC_LABELS: Record<Metric | 'overall', string> = {
-	outcome: 'Outcome accuracy',
-	tool_selection: 'Tool selection',
-	tool_args: 'Tool arguments and results',
-	approval: 'Approval compliance',
-	triage: 'Triage (priority, links, hold)',
-	safety: 'Safety',
-	response: 'Response quality',
-	structure: 'Structured output validity',
-	failure_handling: 'Failure handling (scripted)',
-	overall: 'Overall (runs with no failed check)',
-};
 
 function percent(tally: Tally): string {
 	return tally.graded === 0 ? '–' : `${((100 * tally.passed) / tally.graded).toFixed(1)}%`;
@@ -81,6 +71,7 @@ export function renderReport(results: Results, cases: readonly EvalCase[]): stri
 	lines.push(`| Model | \`${meta.model}\` |`);
 	lines.push(`| JEV_MODEL | \`${meta.jevModel}\` |`);
 	lines.push(`| Outcome judge | Jev Choice v${meta.judge.version ?? 1} on \`${meta.judge.model}\`, floor ${meta.judge.floor} |`);
+	if (meta.grading) lines.push(`| Grading | grader v${meta.grading.grader}, dataset \`${meta.grading.dataset}\` |`);
 	lines.push(`| Live reps | ${meta.reps} |`);
 	lines.push(`| Cases | ${meta.cases.live} live, ${meta.cases.scripted} scripted${meta.filter ? ` (filter: ${meta.filter})` : ''} |`);
 	lines.push(`| Requests | ${summary.requests} (${summary.retries429} retried after 429) |`);
@@ -88,7 +79,7 @@ export function renderReport(results: Results, cases: readonly EvalCase[]): stri
 
 	lines.push('## Headline', '');
 	lines.push('| Metric | Passed | Graded | % | Ungraded |', '| --- | --- | --- | --- | --- |');
-	for (const [metric, label] of Object.entries(METRIC_LABELS) as Array<[Metric | 'overall', string]>) {
+	for (const [metric, { label }] of Object.entries(METRIC_INFO) as Array<[Metric | 'overall', { label: string }]>) {
 		const tally = summary.metrics[metric];
 		lines.push(`| ${label} | ${tally.passed} | ${tally.graded} | ${percent(tally)} | ${tally.ungraded} |`);
 	}

@@ -133,6 +133,7 @@ npm run dev        # wrangler dev
 npm test           # unit tests (no network)
 npm run eval       # live Jev eval cases (needs TYPESAFE_AI_API_KEY)
 npm run eval:agent # end-to-end agent eval (needs wrangler login and TYPESAFE_AI_API_KEY)
+npm run eval:export -- --to <path>  # the front end's eval data, from saved results (evals/page.config.ts)
 npm run cf-typegen # regenerate worker-configuration.d.ts after changing bindings
 npm run deploy
 ```

@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { CASES } from './cases.ts';
 import { driveCase, isQuotaExhausted, turnFailures, type CaseRun, type Sent, type WireRequest } from './drive.ts';
-import { gradeCase, JUDGE_FLOOR, summarize, traceOf } from './grade.ts';
+import { datasetFingerprint, gradeCase, GRADER_VERSION, JUDGE_FLOOR, summarize, traceOf } from './grade.ts';
 import { JEV_MODEL } from '../src/jev/run-check.ts';
 import { createJudge, JUDGE_MODEL, JUDGE_VERSION } from './judge.ts';
 import { renderReport, type Results, type ResultsMeta } from './report.ts';
@@ -351,7 +351,8 @@ function grade(meta: ResultsMeta, runs: CaseRun[]): Results {
 		const testCase = CASES.find((candidate) => candidate.id === run.caseId);
 		return testCase ? [gradeCase(testCase, run)] : [];
 	});
-	return { meta, runs, grades, summary: summarize(CASES, graded, grades) };
+	const grading = { grader: GRADER_VERSION, dataset: datasetFingerprint(CASES) };
+	return { meta: { ...meta, grading }, runs, grades, summary: summarize(CASES, graded, grades) };
 }
 
 // Written, then read back, so the report shows exactly what the file holds.

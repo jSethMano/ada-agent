@@ -10,6 +10,7 @@
 		"test": "vitest run",
 		"eval": "JEV_EVAL=1 vitest run --reporter=verbose --silent=false",
 		"eval:agent": "node evals/run.ts",
+		"eval:export": "node evals/export-page.ts",
 		"cf-typegen": "wrangler types"
 	},
 	"devDependencies": {
