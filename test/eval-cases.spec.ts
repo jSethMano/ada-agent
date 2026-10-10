@@ -353,7 +353,8 @@ describe('scripted failures', () => {
 });
 
 describe('README POC scope', () => {
-	const section = readme.split('\n## POC scope\n')[1]?.split('\n## ')[0] ?? '';
+	// A subsection under Solution, so it ends at the next heading of any level.
+	const section = readme.split('\n### POC scope\n')[1]?.split('\n#')[0] ?? '';
 
 	it('lists every use case with at least 3 cases that serve it', () => {
 		const ids = new Map(CASES.map((testCase) => [testCase.id, testCase]));

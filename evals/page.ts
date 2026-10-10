@@ -58,6 +58,9 @@ export type PageSideData = {
 	rep: number;
 	// Under that file's grades.
 	status: StepStatus;
+	// How this case did across every rep in the same file, so one featured run
+	// is never read as the whole story ("passed 1 of 3 runs").
+	caseRuns: { passed: number; total: number };
 	failedChecks: Array<{ step: number; name: string; detail?: string }>;
 	steps: PageStep[];
 };
@@ -175,7 +178,17 @@ function sideView(results: Results, caseId: string, side: PageSide): PageSideDat
 			.filter((check) => check.pass === false && check.name !== 'failure handled')
 			.map((check) => ({ step: step.index + 1, name: check.name, ...(check.detail ? { detail: check.detail } : {}) })),
 	);
-	return { label: side.label, file: side.file.split('/').at(-1) ?? side.file, rep: side.rep, status: grade.status, failedChecks, steps };
+	const runs = results.grades.filter((candidate) => candidate.caseId === caseId);
+	const caseRuns = { passed: runs.filter((candidate) => candidate.status === 'pass').length, total: runs.length };
+	return {
+		label: side.label,
+		file: side.file.split('/').at(-1) ?? side.file,
+		rep: side.rep,
+		status: grade.status,
+		caseRuns,
+		failedChecks,
+		steps,
+	};
 }
 
 function runView(label: string, file: string, results: Results): PageRunData {

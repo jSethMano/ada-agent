@@ -25,6 +25,7 @@ You're often launched from another repo, so this repo's skills aren't loaded for
 | Always, before changing any code | `chak-backend/SKILL.md` |
 | A tool Chak can call: new, renamed, removed, or a changed argument or result | `chak-add-tool/SKILL.md` |
 | A Jev check: new check, new or reworded question, a threshold, `JEV_MODEL` | `chak-add-jev-check/SKILL.md` |
+| The end-to-end eval: a case or label, a run, a report, an iteration, or the page export | `chak-eval/SKILL.md` |
 | Anything touching routing, tools, approval, history, logging, or the checks | `helpdesk-security/references/chak-invariants.md` |
 | A change to what Chak says or does (system prompt, tool descriptions, triage, guard, answer check) | `helpdesk-agent/SKILL.md`, `ticket-triage/SKILL.md`, or `helpdesk-security/SKILL.md`: they describe that behavior and must stay true |
 

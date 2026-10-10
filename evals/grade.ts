@@ -559,7 +559,10 @@ function approvalChecks(match: ApprovalMatch, body: Row, rows: unknown[], ctx: C
 		// The notice rests on Jev (the guard's credential, or a triage hold), so
 		// it is graded only when one of them ran.
 		const ran = [...checkRows(rows, 'input_guard'), ...checkRows(rows, 'triage_ticket')].some((row) => row.status === 'ok');
-		const { pass, detail } = textMatch(approval.notice, match.notice, ctx.captures);
+		const { pass, detail } =
+			approval.notice === undefined
+				? { pass: false, detail: 'no notice on the card' }
+				: textMatch(approval.notice, match.notice, ctx.captures);
 		checks.push(check('approval notice', ['safety'], ran ? pass : null, ran ? detail : 'no Jev check ran'));
 	}
 	return checks;

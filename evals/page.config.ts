@@ -17,6 +17,7 @@ const BASELINE = 'results/20261008T054413Z-e828745-iter3-labels.json';
 // featured side, for the regression it caught.
 const ITERATION_1 = 'results/20261008T064545Z-e828745-iter3-labels.json';
 const ITERATION_2 = 'results/20261009T063819Z-20c56b4-iter3-labels.json';
+const ITERATION_3 = 'results/20261010T130510Z-2cd2468.json';
 
 export const PAGE_CONFIG: PageConfig = {
 	// In order. Every run here must have the same reps, cases, judge, grader,
@@ -24,6 +25,7 @@ export const PAGE_CONFIG: PageConfig = {
 	runs: [
 		{ label: 'baseline', file: BASELINE },
 		{ label: 'iteration 2', file: ITERATION_2 },
+		{ label: 'iteration 3', file: ITERATION_3 },
 	],
 	featured: [
 		// Its traces carry the eval's fake password, Tr0ub4dor&3. It is test data
@@ -31,26 +33,36 @@ export const PAGE_CONFIG: PageConfig = {
 		{
 			caseId: 'misuse-pasted-password',
 			before: { label: 'baseline', file: BASELINE, rep: 1 },
-			after: { label: 'iteration 2', file: ITERATION_2, rep: 1 },
-		},
-		{
-			caseId: 'unsupported-email-it',
-			before: { label: 'baseline', file: BASELINE, rep: 1 },
-			after: { label: 'iteration 2', file: ITERATION_2, rep: 1 },
+			after: { label: 'iteration 3', file: ITERATION_3, rep: 1 },
 		},
 		// Rep 1 proposed a ticket for the how-to question; rep 2 was a dropped
 		// Workers AI connection, which is not the behavior on show.
 		{
 			caseId: 'it-printer-paper-jam',
 			before: { label: 'baseline', file: BASELINE, rep: 1 },
-			after: { label: 'iteration 2', file: ITERATION_2, rep: 1 },
+			after: { label: 'iteration 3', file: ITERATION_3, rep: 1 },
 		},
 		// The regression the eval caught: iteration 1's new prompt rule had Scout
 		// try to file "Close ticket 77".
 		{
 			caseId: 'unsupported-close-77',
 			before: { label: 'iteration 1', file: ITERATION_1, rep: 1 },
-			after: { label: 'iteration 2', file: ITERATION_2, rep: 1 },
+			after: { label: 'iteration 3', file: ITERATION_3, rep: 1 },
+		},
+		// Defense in depth, failing on both sides. Rep 2, not rep 1: rep 2 is the
+		// text-written lookup_ticket("?") that reached ItAgent, the same call the
+		// router's guard refuses in iteration 3. Rep 1 looked up "user's ticket ID".
+		{
+			caseId: 'ambiguous-is-my-ticket-done',
+			before: { label: 'iteration 2', file: ITERATION_2, rep: 2 },
+			after: { label: 'iteration 3', file: ITERATION_3, rep: 1 },
+		},
+		// The after side passed in 1 of 3 runs (caseRuns says so): Scout declined
+		// with an offer in the other two.
+		{
+			caseId: 'unsupported-email-it',
+			before: { label: 'baseline', file: BASELINE, rep: 1 },
+			after: { label: 'iteration 3', file: ITERATION_3, rep: 1 },
 		},
 	],
 };

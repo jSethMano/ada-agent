@@ -196,6 +196,19 @@ describe('buildPage', () => {
 		expect(page.featured[0].before.steps.map((step) => step.request.kind)).toEqual(['question', 'decision']);
 	});
 
+	it("counts how the featured case did across every rep in that side's file", () => {
+		const mixed = results({}, [1, 2]);
+		const failing: CaseRun = {
+			...mixed.runs[1],
+			steps: [pause, { ...decide, status: 502, body: { error: 'Agent turn failed', trace: paused } }],
+		};
+		mixed.runs[1] = failing;
+		mixed.grades[1] = gradeCase(CASE, failing);
+		const page = build(mixed);
+		expect(page.featured[0].after.caseRuns).toEqual({ passed: 1, total: 2 });
+		expect(page.featured[0].before.caseRuns).toEqual({ passed: 1, total: 1 });
+	});
+
 	it('refuses, loudly, a featured side graded differently from the table', () => {
 		expect(() => build(results({ grading: { grader: 2, dataset: 'abc' } }))).toThrow('these results cannot share a page');
 	});

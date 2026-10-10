@@ -414,7 +414,7 @@ describe('approval', () => {
 		const notice = (run: StepRun) =>
 			gradeCase(oneStep(expectNotice), runOf([run])).steps[0].checks.find((c) => c.name === 'approval notice');
 		expect(notice(pause(guard(), 'You shared a password. Change it.'))?.pass).toBe(true);
-		expect(notice(pause(guard()))?.pass).toBe(false);
+		expect(notice(pause(guard()))).toMatchObject({ pass: false, detail: 'no notice on the card' });
 		expect(notice(pause(guard(undefined, 'skipped')))?.pass).toBeNull();
 		expect(responseProblems(200, pause(guard(), 'x').body)).toEqual([]);
 		expect(responseProblems(200, { answer: 'a', iterations: 0, notice: 'x', trace: [guard('blocked')] })).toEqual([]);

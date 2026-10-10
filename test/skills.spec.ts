@@ -8,6 +8,10 @@ import { REPLACE } from '../src/jev/verify-answer';
 import { SYSTEM_PROMPT } from '../src/system-prompt';
 import type { CheckEntry } from '../src/trace';
 import agentSkill from '../.claude/skills/helpdesk-agent/SKILL.md?raw';
+import evalSkill from '../.claude/skills/chak-eval/SKILL.md?raw';
+import { JUDGE_FLOOR, METRIC_INFO } from '../evals/grade';
+import exportSource from '../evals/export-page.ts?raw';
+import runnerSource from '../evals/run.ts?raw';
 import securitySkill from '../.claude/skills/helpdesk-security/SKILL.md?raw';
 import triageSkill from '../.claude/skills/ticket-triage/SKILL.md?raw';
 
@@ -17,7 +21,11 @@ import triageSkill from '../.claude/skills/ticket-triage/SKILL.md?raw';
 // the skill to match, not the other way round.
 
 const SKILLS = import.meta.glob<string>('../.claude/skills/**/*.md', { query: '?raw', import: 'default', eager: true });
-const SOURCES = import.meta.glob<string>(['../src/**/*.ts', './*.ts'], { query: '?raw', import: 'default', eager: true });
+const SOURCES = import.meta.glob<string>(['../src/**/*.ts', '../evals/**/*.ts', './*.ts'], {
+	query: '?raw',
+	import: 'default',
+	eager: true,
+});
 const AGENTS = import.meta.glob<string>('../.claude/agents/*.md', { query: '?raw', import: 'default', eager: true });
 
 // Repo-relative path as a skill writes it (`src/index.ts`) to its glob key.
@@ -40,7 +48,7 @@ function checked(noul: Record<string, number>): CheckEntry {
 describe('every skill', () => {
 	it('names only source files that exist', () => {
 		for (const [skill, text] of Object.entries(SKILLS)) {
-			for (const [, path] of text.matchAll(/`((?:src|test)\/[\w./-]+\.ts)`/g)) {
+			for (const [, path] of text.matchAll(/`((?:src|test|evals)\/[\w./-]+\.ts)`/g)) {
 				expect(source(path), `${skill} names ${path}`).toBeDefined();
 			}
 		}
@@ -49,7 +57,7 @@ describe('every skill', () => {
 	it('lists touchpoints whose symbols are still in the file it names', () => {
 		let rows = 0;
 		for (const [skill, text] of Object.entries(SKILLS)) {
-			for (const [, path, symbol] of text.matchAll(/^\| `((?:src|test)\/[\w./-]+\.ts)` \| `(\w+)` \|/gm)) {
+			for (const [, path, symbol] of text.matchAll(/^\| `((?:src|test|evals)\/[\w./-]+\.ts)` \| `(\w+)` \|/gm)) {
 				rows++;
 				expect(source(path), `${skill} names ${path}`).toBeDefined();
 				expect(source(path), `${skill}: ${symbol} is no longer in ${path}`).toContain(symbol);
@@ -171,5 +179,21 @@ describe('helpdesk-security skill', () => {
 
 	it('names the Jev version its calibration notes come from', () => {
 		expect(securitySkill).toContain(JEV_MODEL);
+	});
+});
+
+describe('chak-eval skill', () => {
+	it('names every metric the grader reports', () => {
+		for (const metric of Object.keys(METRIC_INFO)) expect(evalSkill).toContain(`| \`${metric}\` |`);
+	});
+
+	it('states the judge floor', () => {
+		expect(evalSkill).toContain(`under the ${JUDGE_FLOOR} floor`);
+	});
+
+	it('mentions only flags the runner or the export accepts', () => {
+		const flags = [...new Set([...evalSkill.matchAll(/--([a-z][a-z-]*)/g)].map(([, flag]) => flag))];
+		expect(flags.length).toBeGreaterThanOrEqual(8);
+		for (const flag of flags) expect(`${runnerSource}\n${exportSource}`, `--${flag}`).toContain(`--${flag}`);
 	});
 });
