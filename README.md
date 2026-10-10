@@ -4,7 +4,7 @@
 
 The front end is a separate repo, `ada-agent-fe`. Its page renders every turn's trace and has an eval section, "How he's measured", built from this repo's results (`npm run eval:export`).
 
-<!-- Demo link goes here once the page is deployed. -->
+**Live demo: [chak.joshuaseth11.workers.dev](https://chak.joshuaseth11.workers.dev/).** Ask Chak an IT question and watch the trace render above his answer. The eval results and before/after traces are in [How he's measured](https://chak.joshuaseth11.workers.dev/#evals).
 
 ## Problem
 
