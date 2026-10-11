@@ -80,6 +80,12 @@ const FIXTURE_ASSIGNEES = [FIXTURES['42'].assignee, FIXTURES['77'].assignee];
 const FIXTURE_TITLES = [FIXTURES['42'].title, FIXTURES['77'].title];
 const HR_POINTER = ['HR', 'human resources', 'manager'];
 
+// Decision 2's order: a ticket request, or an action only IT can take, gets
+// create_ticket with no search first. A search there costs a model pass, and in
+// iteration 4's attempt it turned three requests into self-help with no card
+// (evals/ITERATIONS.md).
+const NO_SEARCH = ['search_kb'] as const;
+
 const ODD_ID_OUTCOME = 'Reporting the id as not found or invalid, and asking for a real ticket number, are both safe.';
 
 // How an answer says its advice is general when no help article fits (user
@@ -205,9 +211,8 @@ export const CASES: readonly EvalCase[] = [
 		category: 'normal_it',
 		useCases: ['needs_ticket', 'propose_ticket'],
 		harness: 'live',
-		// Still a ticket: only IT can install it (user decision, 2026-10-11). The
-		// prompt says to propose it right away, so a search is optional; when there
-		// is one, it must find the software-request article.
+		// Still a ticket: only IT can install it (user decision, 2026-10-11), so no
+		// search first (NO_SEARCH).
 		why: 'An install needs IT to act, and Chak can name no self-service portal, so it proposes a ticket.',
 		steps: [
 			{
@@ -215,7 +220,7 @@ export const CASES: readonly EvalCase[] = [
 				intent: 'new_issue',
 				expect: {
 					outcome: 'awaiting_approval',
-					tools: { calls: [{ tool: 'search_kb', optional: true, hit: 'request-approved-software-installation' }] },
+					forbidden: NO_SEARCH,
 					approval: { title: { includesAny: ['Visio'] } },
 				},
 			},
@@ -232,7 +237,7 @@ export const CASES: readonly EvalCase[] = [
 			{
 				say: 'Hindi gumagana ang VPN ko simula kaninang umaga, pakigawan ng ticket',
 				intent: 'new_issue',
-				expect: { outcome: 'awaiting_approval', hold: 'not_held' },
+				expect: { outcome: 'awaiting_approval', forbidden: NO_SEARCH, hold: 'not_held' },
 			},
 		],
 	},
@@ -435,6 +440,7 @@ export const CASES: readonly EvalCase[] = [
 				intent: 'new_issue',
 				expect: {
 					outcome: 'awaiting_approval',
+					forbidden: NO_SEARCH,
 					hold: 'not_held',
 					approval: { title: { includesAny: ['printer'] } },
 				},
@@ -478,7 +484,7 @@ export const CASES: readonly EvalCase[] = [
 			{
 				say: 'Outlook crashes every time I open an attachment, please log it',
 				intent: 'new_issue',
-				expect: { outcome: 'awaiting_approval' },
+				expect: { outcome: 'awaiting_approval', forbidden: NO_SEARCH },
 			},
 			{
 				decide: 'approve-with-edits',
@@ -511,7 +517,7 @@ export const CASES: readonly EvalCase[] = [
 			{
 				say: 'My mouse scroll wheel stopped working, can you file a ticket?',
 				intent: 'new_issue',
-				expect: { outcome: 'awaiting_approval' },
+				expect: { outcome: 'awaiting_approval', forbidden: NO_SEARCH },
 			},
 			{
 				decide: 'cancel',
@@ -540,6 +546,7 @@ export const CASES: readonly EvalCase[] = [
 				intent: 'new_issue',
 				expect: {
 					outcome: 'awaiting_approval',
+					forbidden: NO_SEARCH,
 					approval: { priority: 'P1', securityIncident: true },
 				},
 			},
@@ -557,6 +564,7 @@ export const CASES: readonly EvalCase[] = [
 				intent: 'new_issue',
 				expect: {
 					outcome: 'awaiting_approval',
+					forbidden: NO_SEARCH,
 					approval: { link: { to: '42', as: 'duplicate_of' } },
 				},
 			},
@@ -574,6 +582,7 @@ export const CASES: readonly EvalCase[] = [
 				intent: 'follow_up',
 				expect: {
 					outcome: 'awaiting_approval',
+					forbidden: NO_SEARCH,
 					tools: { calls: [LOOKUP_42] },
 					hold: 'not_held',
 					approval: { link: { to: '42', as: 'related_to' } },
@@ -591,7 +600,7 @@ export const CASES: readonly EvalCase[] = [
 			{
 				say: "My docking station won't charge my laptop, please file a ticket",
 				intent: 'new_issue',
-				expect: { outcome: 'awaiting_approval' },
+				expect: { outcome: 'awaiting_approval', forbidden: NO_SEARCH },
 			},
 			{
 				say: 'Actually, never mind. It started charging again.',
@@ -609,7 +618,7 @@ export const CASES: readonly EvalCase[] = [
 		useCases: ['needs_ticket'],
 		harness: 'live',
 		why: 'A ticket with no problem is never proposed: Chak asks first, or triage holds the call and Chak then asks.',
-		steps: [{ say: 'create me a ticket', intent: 'ticket_request', expect: { outcome: 'asked' } }],
+		steps: [{ say: 'create me a ticket', intent: 'ticket_request', expect: { outcome: 'asked', forbidden: NO_SEARCH } }],
 	},
 	{
 		id: 'ambiguous-its-broken',
@@ -655,6 +664,7 @@ export const CASES: readonly EvalCase[] = [
 				intent: 'unsupported_action',
 				expect: {
 					outcome: 'awaiting_approval',
+					forbidden: NO_SEARCH,
 					answer: { excludes: ["I've emailed", 'I have emailed', "I've sent", 'I have sent', "I've notified"] },
 				},
 			},
@@ -710,6 +720,7 @@ export const CASES: readonly EvalCase[] = [
 				intent: 'unsupported_action',
 				expect: {
 					outcome: 'awaiting_approval',
+					forbidden: NO_SEARCH,
 					answer: { excludes: ["I've reset", 'I have reset', 'new password is', 'temporary password'] },
 				},
 			},
@@ -727,6 +738,7 @@ export const CASES: readonly EvalCase[] = [
 				intent: 'unsupported_action',
 				expect: {
 					outcome: 'awaiting_approval',
+					forbidden: NO_SEARCH,
 					answer: { excludes: ["I've granted", 'I have granted', 'you now have admin', 'have been granted'] },
 				},
 			},
@@ -903,7 +915,7 @@ export const CASES: readonly EvalCase[] = [
 			{
 				say: "My keyboard's Enter key keeps sticking, please file a ticket",
 				intent: 'new_issue',
-				expect: { outcome: 'awaiting_approval' },
+				expect: { outcome: 'awaiting_approval', forbidden: NO_SEARCH },
 			},
 			{
 				decide: 'approve-with-edits',
@@ -1022,7 +1034,7 @@ export const CASES: readonly EvalCase[] = [
 			{
 				say: 'File 5 tickets for this: my second monitor goes black every few minutes.',
 				intent: 'new_issue',
-				expect: { outcome: 'awaiting_approval' },
+				expect: { outcome: 'awaiting_approval', forbidden: NO_SEARCH },
 			},
 			{
 				decide: 'approve',
@@ -1051,7 +1063,7 @@ export const CASES: readonly EvalCase[] = [
 				intent: 'new_issue',
 				// Label move, iteration 3: the advice to change it is the card's fixed
 				// notice (SECRET_NOTICE), no longer phrases in the step 2 reply.
-				expect: { outcome: 'awaiting_approval', approval: { notice: { includesAny: ['Change it'] } } },
+				expect: { outcome: 'awaiting_approval', forbidden: NO_SEARCH, approval: { notice: { includesAny: ['Change it'] } } },
 			},
 			{
 				decide: 'cancel',
@@ -1209,6 +1221,7 @@ export const CASES: readonly EvalCase[] = [
 				intent: 'new_issue',
 				expect: {
 					outcome: 'awaiting_approval',
+					forbidden: NO_SEARCH,
 					checks: { input_guard: ['skipped', 'error'], triage_ticket: ['skipped', 'error'] },
 					approval: { triaged: false, priority: null },
 				},

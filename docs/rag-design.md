@@ -255,22 +255,21 @@ Embedding 15 articles each time is cheap, so there is no change detection to get
 
 ## 5. Prompt and tool description
 
-**The rule for D2**, exactly as built:
+**The rule for D2**, exactly as built. The order matters: the first case wins. Iteration 4's attempt showed why. With "search first" stated before the exception, Scout searched on explicit ticket requests and gave self-help instead of a card (`evals/ITERATIONS.md`).
 
-- **A how-to or troubleshooting question, or an IT problem the visitor describes without asking for a ticket:** call `search_kb` first. Give the steps of the article that fits, and name its title. Then:
+- **First, a ticket at once, with no search:**
+  - the visitor asks for a ticket about a problem (file, log, open, or raise one, or contact or email IT);
+  - the visitor asks for something only IT staff can do: reset a password, grant access, install software, or a lost or stolen device or a security incident.
+- **Only otherwise, a how-to or troubleshooting question, or an IT problem described without asking for a ticket:** call `search_kb` first. Give the steps of the article that fits, and name its title. Then:
   - **Propose a ticket** (`create_ticket`) only when the article's `file_ticket_when` fits the visitor's situation, or the visitor says they already tried the steps.
   - **No article fits:** D1 applies (below).
-- **Still a ticket proposal at once,** with or without a search first:
-  - the visitor asks for a ticket about a problem they describe ("…, please file a ticket", "pakigawan ng ticket");
-  - the visitor asks for something only IT staff can do: contact IT, reset a password, grant access, install software, or deal with a lost or stolen device or a security incident.
-
-  The security items were this design's reading of "only IT can fulfil", and the user confirmed them (2026-10-11). They match the helpdesk-agent skill's rule to propose security tickets right away.
+- The security items were this design's reading of "only IT can fulfil", and the user confirmed them (2026-10-11). They match the helpdesk-agent skill's rule to propose security tickets right away.
 - **Unchanged:** asking for a ticket without saying what is wrong is still answered with a question, and triage still holds such a ticket.
 
 **The rule for D1:** give brief general advice and say plainly that it is general advice, not from the company help articles. The same applies when the search itself fails.
 
 **The system prompt** (`src/system-prompt.ts`):
-- The old "answer how-to questions directly" sentence is replaced by the D2 and D1 rules above.
+- The old "answer how-to questions directly" sentence is replaced by "Decide in this order", with the D2 and D1 rules above: a ticket request or IT-only action first ("call create_ticket and do NOT call search_kb"), then search.
 - The tools sentence names the help articles.
 - The STRICT RULES tool list reads "You have exactly four tools: search_kb, lookup_ticket, list_my_tickets, and create_ticket".
 - The IT-only list adds installs, and lost or stolen devices and security incidents.
@@ -279,13 +278,14 @@ Embedding 15 articles each time is cheap, so there is no change detection to get
 
 **The tool descriptions** (`TOOLS`, `src/index.ts`):
 - **`search_kb`:**
-  - when to use it, and when not (tickets, outside IT, greetings);
+  - when to use it, and when not: never for a ticket request or an IT-only action ("call create_ticket instead"), nor for tickets, questions outside IT, or greetings;
   - what the result holds;
   - use an article only if it fits, give its steps, and name it;
   - when to call `create_ticket`;
   - the general-advice rule.
 - **`create_ticket`:**
   - use it for a ticket request, an IT-only action, or a problem an article's `file_ticket_when` covers or its steps didn't fix;
+  - for a ticket request or an IT-only action, call it directly, without `search_kb`;
   - not for how-to questions or a problem described without a ticket request ("search_kb first").
 
 ---
@@ -348,14 +348,14 @@ Following the chak-eval skill.
 
 The out-of-scope cases and the greeting already expect `tools: 'none'`, which rules out a search.
 
-**Still a ticket proposal.** Each of these asks for a ticket, or for something only IT can do:
-- `it-software-install`: an install. It still pauses for approval. A search is now optional, and when there is one, it must find `request-approved-software-installation`. The prompt says to propose an IT-only request right away, so a required search would contradict D2;
+**Still a ticket proposal, with no search.** Each of these asks for a ticket, or for something only IT can do. Since iteration 4's attempt, `search_kb` is forbidden on all of them (`NO_SEARCH` in `evals/cases.ts`):
+- `it-software-install`: an install;
 - `it-vpn-tagalog`: "pakigawan ng ticket" asks for one;
 - `unsupported-reset-password`, `unsupported-admin-rights`, `unsupported-email-it`;
 - `ticket-security-stolen-laptop`;
-- every "file a ticket" case.
+- every "file a ticket" case, and `ambiguous-create-me-a-ticket`.
 
-The password-reset and software articles describe self-service routes, so watch whether those cases still propose.
+The full list is in `evals/ITERATIONS.md`.
 
 **The `retrieval` metric:**
 - It is hit@3: the expected article is among a `search_kb` call's results.

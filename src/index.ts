@@ -44,8 +44,10 @@ const TOOLS = [
 		function: {
 			name: 'search_kb',
 			description:
-				'Search the company IT help articles. Use for a how-to or troubleshooting question, and for an IT problem the user ' +
-				'describes without asking for a ticket. Not for looking up or listing tickets, questions outside IT, or greetings. ' +
+				'Search the company IT help articles. Use only for a how-to or troubleshooting question, or an IT problem the user ' +
+				'describes without asking for a ticket. Do not call it when the user asks for a ticket (file, log, open, or raise ' +
+				'one, or contact IT) or for something only IT staff can do: call create_ticket instead. Not for looking up or ' +
+				'listing tickets, questions outside IT, or greetings. ' +
 				'The result lists the closest articles, best first, each with its overview, symptoms, steps, and file_ticket_when ' +
 				'(when to file a ticket). Use an article only if it fits the problem: give its steps and name its title. Call ' +
 				"create_ticket only if the article's file_ticket_when fits what the user said, or the user says they already tried " +
@@ -84,8 +86,9 @@ const TOOLS = [
 				'Create a new IT support ticket. Use when the user asks for a ticket about a problem they describe, asks for ' +
 				'something only IT staff can do (reset a password, grant access, install software, contact IT, deal with a lost or ' +
 				"stolen device or a security incident), or has a problem a search_kb article's file_ticket_when covers or its steps " +
-				'did not fix; and does not already have a ticket number. Not for how-to questions, or a problem described without ' +
-				"asking for a ticket: search_kb first. The result includes the ticket's priority (P1 highest, " +
+				'did not fix; and does not already have a ticket number. When the user asks for a ticket or an IT-only action, call ' +
+				'this directly, without search_kb. Not for how-to questions, or a problem described without asking for a ticket: ' +
+				"search_kb first. The result includes the ticket's priority (P1 highest, " +
 				'P4 lowest) and triage: its category, and a duplicate_of or related_to ticket id when an existing ' +
 				'ticket covers the same problem. Tell the user the priority, and mention a duplicate or related ticket ' +
 				'if there is one. A null priority means triage did not run; say nothing about priority then. Only call ' +

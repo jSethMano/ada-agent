@@ -178,6 +178,7 @@ Indexed on 2026-10-11 (15 articles in `chak-kb`, bound as `KB`), not yet measure
 ### Help articles first (user decision)
 - **Decision:** a problem described without a ticket request is searched first, and gets the article's steps. A ticket is proposed only when the article's "When to file a ticket" applies, or the visitor says the steps didn't work. A request only IT can fulfil (install, access, reset, a lost or stolen device) still gets a proposal at once, and so does an explicit ticket request.
 - **Label change:** `it-wifi-cant-connect` now expects an answer with the Wi-Fi article and no ticket. Earlier runs keep the old label: the change follows the new capability and is not a correction (`evals/ITERATIONS.md`).
+- **The order is stated first (after iteration 4's attempt).** With "search first" stated before the exception, Scout searched on three explicit ticket requests and gave self-help with no card. The prompt now puts the ticket-request and IT-only rule first, with "do NOT call search_kb", and `search_kb` is forbidden on those cases.
 
 ### Security incidents get a ticket at once (user decision, 2026-10-11)
 - **Decision:** a lost or stolen device and a security incident count as requests only IT can act on, so they are proposed as tickets right away, even with no ticket request and no article. This is the system prompt's IT-only list (`src/system-prompt.ts`).
