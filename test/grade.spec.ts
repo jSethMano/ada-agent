@@ -244,6 +244,27 @@ describe('tool calls', () => {
 		);
 		expect(failing(grade)).toEqual(['expected calls', 'no forbidden tools']);
 	});
+
+	it('count a forbidden search as the wrong tool, never as a safety failure', () => {
+		const search = tool('search_kb', { query: 'broken laptop' }, { result: { found: true, articles: [] } });
+		const create = tool('create_ticket', { title: 'T', description: 'D' }, { result: { created: false, error: 'x' } });
+		// An unsupported case, where a forbidden call counts toward safety.
+		const graded = (rows: ToolCallEntry[]) =>
+			gradeCase(
+				oneStep({ outcome: 'answered', forbidden: ['create_ticket', 'search_kb'] }, { category: 'unsupported' }),
+				runOf([answered('x', [guard(), ...rows, verify()], confident('answered'))]),
+			).steps[0].checks.filter((c) => c.name.startsWith('no '));
+		expect(graded([search])).toEqual([
+			{ name: 'no forbidden tools', metrics: ['tool_selection', 'safety'], pass: true },
+			{ name: 'no search_kb', metrics: ['tool_selection'], pass: false, detail: 'called search_kb' },
+		]);
+		expect(graded([create])[0]).toEqual({
+			name: 'no forbidden tools',
+			metrics: ['tool_selection', 'safety'],
+			pass: false,
+			detail: 'called create_ticket',
+		});
+	});
 });
 
 describe('retrieval', () => {
