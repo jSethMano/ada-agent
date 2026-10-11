@@ -67,21 +67,38 @@ export type PageSideData = {
 	steps: PageStep[];
 };
 
+// How one table's runs were measured: the cases they sent, and the answer key.
+export type PageMethod = {
+	cases: number;
+	steps: number;
+	categories: Array<{ id: Category; cases: number }>;
+	liveReps: number;
+	judge: { model: string; version: number; floor: number };
+	grading: { grader: number; dataset: string };
+	metrics: Array<{ id: Metric | 'overall'; label: string; definition: string }>;
+};
+
+// Cases only a later table's runs have, from one results file. Live runs
+// only, as in every metric: a scripted case's model is scripted.
+export type PageNewCases = {
+	label: string;
+	file: string;
+	retrieval: PageTally;
+	cases: Array<{ caseId: string; category: Category; why: string; harness: 'live' | 'scripted'; passed: number; runs: number }>;
+};
+
+export type PageComparisonData = { id: string; title: string; method: PageMethod; runs: PageRunData[]; newCases?: PageNewCases };
+
 export type PageData = {
 	generatedAt: string;
 	// The ada-agent commit the export ran on, and whether it had code changes.
 	source: { commit: string; dirty: boolean };
-	method: {
-		cases: number;
-		steps: number;
-		categories: Array<{ id: Category; cases: number }>;
-		liveReps: number;
-		judge: { model: string; version: number; floor: number };
-		grading: { grader: number; dataset: string };
-		metrics: Array<{ id: Metric | 'overall'; label: string; definition: string }>;
-	};
+	// The historical table's.
+	method: PageMethod;
 	runs: PageRunData[];
 	featured: Array<{ caseId: string; category: Category; why: string; before: PageSideData; after: PageSideData }>;
+	// Present only when page.config.ts has comparisons.
+	comparisons?: PageComparisonData[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -216,9 +233,64 @@ function runView(label: string, file: string, results: Results, shown: ReadonlyA
 	};
 }
 
+/** One table's method, and the metrics its runs report. Its runs share a grading stamp, so they report the same metrics. */
+function tableMethod(
+	table: Array<{ results: Results }>,
+	cases: readonly EvalCase[],
+): { method: PageMethod; shown: Array<Metric | 'overall'> } {
+	const { meta, summary } = table[0].results;
+	const shown = [...METRICS, 'overall' as const].filter((metric) => summary.metrics[metric] !== undefined);
+	// Described from the cases the runs sent, so a case added to the dataset
+	// since is never presented as measured.
+	const sent = new Set(table.flatMap(({ results }) => results.runs.map((run) => run.caseId)));
+	const measured = cases.filter((testCase) => sent.has(testCase.id));
+	const method: PageMethod = {
+		cases: measured.length,
+		steps: measured.reduce((total, testCase) => total + testCase.steps.length, 0),
+		categories: CATEGORIES.map((id) => ({ id, cases: measured.filter((testCase) => testCase.category === id).length })),
+		liveReps: meta.reps,
+		judge: { model: meta.judge.model, version: meta.judge.version ?? 1, floor: meta.judge.floor },
+		grading: meta.grading ?? { grader: 0, dataset: '' },
+		metrics: shown.map((id) => ({ id, ...METRIC_INFO[id] })),
+	};
+	return { method, shown };
+}
+
+/** Pass counts and retrieval for cases only a later table has. Throws for a case the dataset or the file lacks. */
+export function newCasesView(
+	label: string,
+	file: string,
+	results: Results,
+	caseIds: readonly string[],
+	cases: readonly EvalCase[],
+): PageNewCases {
+	const retrieval: PageTally = { passed: 0, graded: 0, ungraded: 0 };
+	const rows = caseIds.map((caseId) => {
+		const testCase = cases.find((candidate) => candidate.id === caseId);
+		if (!testCase) throw new Error(`new case not in the dataset: ${caseId}`);
+		const grades = results.grades.filter((grade) => grade.caseId === caseId);
+		if (grades.length === 0) throw new Error(`no graded runs of ${caseId} in ${file}`);
+		if (testCase.harness === 'live') {
+			for (const check of grades.flatMap((grade) => grade.steps.flatMap((step) => step.checks))) {
+				if (!check.metrics.includes('retrieval')) continue;
+				if (check.pass === null) retrieval.ungraded++;
+				else {
+					retrieval.graded++;
+					if (check.pass) retrieval.passed++;
+				}
+			}
+		}
+		const passed = grades.filter((grade) => grade.status === 'pass').length;
+		return { caseId, category: testCase.category, why: testCase.why, harness: testCase.harness, passed, runs: grades.length };
+	});
+	return { label, file: file.split('/').at(-1) ?? file, retrieval, cases: rows };
+}
+
 /**
  * The page's data from saved results, keyed by the paths in `config`. Throws
- * with every problem at once when the files cannot share a page.
+ * with every problem at once when the files cannot share a page. Each table is
+ * checked on its own: the historical one with its featured cases, and each
+ * comparison with its new cases' file.
  */
 export function buildPage(input: {
 	config: PageConfig;
@@ -237,28 +309,24 @@ export function buildPage(input: {
 	const featuredFiles = config.featured
 		.flatMap(({ before, after }) => [before, after])
 		.map(({ label, file }) => ({ label, results: load(file) }));
-	const problems = comparabilityProblems(table, featuredFiles);
+	const comparisons = (config.comparisons ?? []).map((comparison) => ({
+		comparison,
+		table: comparison.runs.map(({ label, file }) => ({ label, results: load(file) })),
+		extra: comparison.newCases ? [{ label: `${comparison.id} new cases`, results: load(comparison.newCases.file) }] : [],
+	}));
+	const problems = [
+		...comparabilityProblems(table, featuredFiles),
+		...comparisons.flatMap(({ comparison, table: runs, extra }) =>
+			comparabilityProblems(runs, extra).map((problem) => `${comparison.id}: ${problem}`),
+		),
+	];
 	if (problems.length > 0) throw new Error(`these results cannot share a page:\n${problems.join('\n')}`);
 
-	const { meta, summary } = table[0].results;
-	// The table's runs share a grading stamp, so they report the same metrics.
-	const shown = [...METRICS, 'overall' as const].filter((metric) => summary.metrics[metric] !== undefined);
-	// Described from the cases the runs sent, so a case added to the dataset
-	// since is never presented as measured.
-	const sent = new Set(table.flatMap(({ results }) => results.runs.map((run) => run.caseId)));
-	const measured = cases.filter((testCase) => sent.has(testCase.id));
+	const { method, shown } = tableMethod(table, cases);
 	return {
 		generatedAt: input.generatedAt,
 		source: input.source,
-		method: {
-			cases: measured.length,
-			steps: measured.reduce((total, testCase) => total + testCase.steps.length, 0),
-			categories: CATEGORIES.map((id) => ({ id, cases: measured.filter((testCase) => testCase.category === id).length })),
-			liveReps: meta.reps,
-			judge: { model: meta.judge.model, version: meta.judge.version ?? 1, floor: meta.judge.floor },
-			grading: meta.grading ?? { grader: 0, dataset: '' },
-			metrics: shown.map((id) => ({ id, ...METRIC_INFO[id] })),
-		},
+		method,
 		runs: config.runs.map(({ label, file }) => runView(label, file, load(file), shown)),
 		featured: config.featured.map(({ caseId, before, after }) => {
 			const testCase = cases.find((candidate) => candidate.id === caseId);
@@ -271,5 +339,20 @@ export function buildPage(input: {
 				after: sideView(load(after.file), caseId, after),
 			};
 		}),
+		...(config.comparisons
+			? {
+					comparisons: comparisons.map(({ comparison, table: runs }) => {
+						const measured = tableMethod(runs, cases);
+						const { newCases } = comparison;
+						return {
+							id: comparison.id,
+							title: comparison.title,
+							method: measured.method,
+							runs: comparison.runs.map(({ label, file }) => runView(label, file, load(file), measured.shown)),
+							...(newCases ? { newCases: newCasesView(newCases.label, newCases.file, load(newCases.file), newCases.caseIds, cases) } : {}),
+						};
+					}),
+				}
+			: {}),
 	};
 }

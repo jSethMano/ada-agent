@@ -407,6 +407,31 @@ The password-reset and software articles describe self-service routes, so watch 
 
 - **So they keep their grader 1 stamp.** It is shared, so `npm run eval:export` still passes its stamp check, and its output is unchanged.
 
+## Two tables (from iteration 4)
+
+**Why there are two.** The historical table keeps the baseline and iterations 2 and 3 under the answer key of their time: grader 1 and the 50 original cases. Iteration 4 is the first full run under the help-article labels: grader 3 and 56 cases. Neither key fits both:
+- **Regrading the old runs under today's key** would score them on a capability they didn't have. Iteration 3 drops from 126 to 117 of 132, for not searching before search existed.
+- **Grading iteration 4 under the old key** would ignore what it is now asked to do.
+
+So the page gets a second table, "since RAG", beside the historical one:
+- **The shared cases:** iteration 3 regraded under the current key, as a copy, against iteration 4. Both are restricted to the 50 cases they share, so each has 132 runs.
+- **The 6 help-article cases,** on their own: retrieval hit@3 and pass counts. Iteration 3 has no runs of them.
+
+**Already made:** `results/20261010T130510Z-2cd2468-rag-labels.json`, iteration 3 under the current key (grader 3, dataset `e65d907f`): 117/132. The original is untouched. A regrade is always a copy, and the runner refuses an `--out` equal to `--regrade`.
+
+**After iteration 4 runs** (no requests needed):
+
+```sh
+npm run eval:agent -- --regrade evals/results/<iteration 4>.json \
+  --cases-from evals/results/20261010T130510Z-2cd2468.json --out evals/results/<iteration 4>-shared.json
+```
+
+Then fill in `comparisons` in `page.config.ts` (the template is there) and export.
+- **`--cases-from`** keeps only the cases that file ran, and recounts `meta.cases` to match.
+- **The export checks each table on its own.** Its runs must share a grading stamp, reps, case counts, and judge version, and the new cases' file must share the comparison's stamp.
+- **If the labels change before iteration 4,** regrade the iteration 3 copy again; the stamp check refuses a mismatch.
+- **If iteration 4 is INCOMPLETE again,** its shared copy has fewer cases, and the export refuses it (different case counts).
+
 ## Commands
 
 To regenerate the page data after a new run, list the run in `page.config.ts` and run:

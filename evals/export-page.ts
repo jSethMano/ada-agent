@@ -33,6 +33,10 @@ try {
 	const paths = new Set([
 		...PAGE_CONFIG.runs.map((run) => run.file),
 		...PAGE_CONFIG.featured.flatMap(({ before, after }) => [before.file, after.file]),
+		...(PAGE_CONFIG.comparisons ?? []).flatMap(({ runs, newCases }) => [
+			...runs.map((run) => run.file),
+			...(newCases ? [newCases.file] : []),
+		]),
 	]);
 	const files: Record<string, Results> = {};
 	for (const path of paths) files[path] = JSON.parse(readFileSync(join(EVALS, path), 'utf8')) as Results;
@@ -49,7 +53,8 @@ try {
 	const out = resolve(flags.to);
 	mkdirSync(dirname(out), { recursive: true });
 	writeFileSync(out, `${JSON.stringify(page, null, 1)}\n`);
-	console.log(`wrote ${out}: ${page.runs.length} runs, ${page.featured.length} featured cases, ${statSync(out).size} bytes`);
+	const extra = page.comparisons ? `, ${page.comparisons.length} comparison tables` : '';
+	console.log(`wrote ${out}: ${page.runs.length} runs, ${page.featured.length} featured cases${extra}, ${statSync(out).size} bytes`);
 } catch (error) {
 	console.error(error instanceof Error ? error.message : error);
 	process.exit(1);

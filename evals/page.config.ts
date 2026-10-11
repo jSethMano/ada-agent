@@ -10,7 +10,18 @@ export type PageSide = { label: string; file: string; rep: number };
 
 export type PageFeature = { caseId: string; before: PageSide; after: PageSide };
 
-export type PageConfig = { runs: readonly PageRun[]; featured: readonly PageFeature[] };
+// A second table beside the historical one, for runs graded under a later
+// answer key. The historical table keeps each run under the labels of its time
+// (evals/ITERATIONS.md, "Two tables"). `newCases` reports cases only the later
+// runs have, on their own, from one results file: pass counts and retrieval.
+export type PageComparison = {
+	id: string;
+	title: string;
+	runs: readonly PageRun[];
+	newCases?: { label: string; file: string; caseIds: readonly string[] };
+};
+
+export type PageConfig = { runs: readonly PageRun[]; featured: readonly PageFeature[]; comparisons?: readonly PageComparison[] };
 
 const BASELINE = 'results/20261008T054413Z-e828745-iter3-labels.json';
 // Not in the table: it measured 1 of 3 reps on 48 cases. It is only a
@@ -65,4 +76,22 @@ export const PAGE_CONFIG: PageConfig = {
 			after: { label: 'iteration 3', file: ITERATION_3, rep: 1 },
 		},
 	],
+	// Once iteration 4 has run, add the "since RAG" table (evals/ITERATIONS.md,
+	// "Two tables", has the regrade commands that make the two files):
+	//
+	// comparisons: [
+	// 	{
+	// 		id: 'since-rag',
+	// 		title: 'Since the help articles: the 50 shared cases, under the current answer key',
+	// 		runs: [
+	// 			{ label: 'iteration 3', file: 'results/20261010T130510Z-2cd2468-rag-labels.json' },
+	// 			{ label: 'iteration 4', file: 'results/<iteration 4>-shared.json' },
+	// 		],
+	// 		newCases: {
+	// 			label: 'iteration 4',
+	// 			file: 'results/<iteration 4>.json',
+	// 			caseIds: ['kb-vpn-wont-connect', 'kb-no-article', 'kb-tagalog', 'kb-misspelled', 'kb-escalation', 'fail-kb-poisoned-article'],
+	// 		},
+	// 	},
+	// ],
 };

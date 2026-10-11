@@ -46,6 +46,12 @@ export type CaseRun = {
 	incomplete?: string;
 };
 
+/** How many distinct cases `runs` covers, by harness: a results file's `meta.cases`. */
+export function caseCounts(runs: readonly CaseRun[]): { live: number; scripted: number } {
+	const count = (harness: CaseRun['harness']) => new Set(runs.filter((run) => run.harness === harness).map((run) => run.caseId)).size;
+	return { live: count('live'), scripted: count('scripted') };
+}
+
 // A turn the Worker reported as failed, read from its log (src/index.ts writes
 // `{"event":"turn.failed","instance":…,"detail":…}`). A 502 body never says
 // why, by design, so the log is the only place the cause shows.

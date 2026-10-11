@@ -153,5 +153,6 @@ npm run eval:export -- --to ../ada-agent-fe/src/data/evals.json
 
   Regrade a file with the current labels before adding it.
 - **Comparable runs only.** Leave out a run that measured fewer reps or cases.
+- **A later answer key gets its own table.** `comparisons` in `PAGE_CONFIG` adds a table beside the historical one. Since the help articles, it pairs iteration 3 regraded under the current labels (a copy) with iteration 4, restricted to the cases both ran (`--regrade … --cases-from <older file>`), and reports cases only the newer run has on their own (`newCases`). Never regrade a historical file in place: the runner refuses `--out` equal to `--regrade`.
 - **Older runs.** The page describes only the cases the table's runs sent, and only the metrics they report, so a case or metric added since is never shown as measured. A case's `why` comes from the current dataset, though: after a label change, re-export only once a run under the new labels exists.
 - **Front-end copy.** The front end owns the featured cases' titles and captions (`FEATURED_COPY` in `ada-agent-fe/src/lib/evals.ts`). When a featured case or its result changes, tell the front end to re-check that copy. Don't edit it from here.

@@ -12,10 +12,10 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { CASES } from './cases.ts';
-import { driveCase, isQuotaExhausted, turnFailures, type CaseRun, type Sent, type WireRequest } from './drive.ts';
+import { caseCounts, driveCase, isQuotaExhausted, turnFailures, type CaseRun, type Sent, type WireRequest } from './drive.ts';
 import { datasetFingerprint, gradeCase, GRADER_VERSION, JUDGE_FLOOR, summarize, traceOf } from './grade.ts';
 import { JEV_MODEL } from '../src/jev/run-check.ts';
 import { createJudge, JUDGE_MODEL, JUDGE_VERSION } from './judge.ts';
@@ -42,6 +42,7 @@ const { values: flags } = parseArgs({
 		reps: { type: 'string', default: '3' },
 		only: { type: 'string' },
 		cases: { type: 'string' },
+		'cases-from': { type: 'string' },
 		port: { type: 'string', default: '8787' },
 		regrade: { type: 'string' },
 		rep: { type: 'string' },
@@ -58,6 +59,7 @@ if (flags.help) {
   --reps N          live repetitions per case (default 3; scripted cases run once)
   --only live|scripted
   --cases a,b       only these case ids
+  --cases-from FILE only the cases that results file ran: with --regrade, the cases two runs share
   --port N          port for wrangler dev (default 8787)
   --regrade FILE    grade a saved results file again, without sending requests
   --rep N           with --regrade or --live-from: keep live repetition N only, for a run
@@ -105,7 +107,10 @@ function typesafeKey(): string | undefined {
 }
 
 function selectedCases(): EvalCase[] {
-	const ids = flags.cases?.split(',').map((id) => id.trim());
+	const from = flags['cases-from'];
+	const ids = from
+		? [...new Set((JSON.parse(readFileSync(from, 'utf8')) as Results).runs.map((run) => run.caseId))]
+		: flags.cases?.split(',').map((id) => id.trim());
 	const unknown = ids?.filter((id) => !CASES.some((testCase) => testCase.id === id)) ?? [];
 	if (unknown.length > 0) throw new Error(`unknown case ids: ${unknown.join(', ')}`);
 	return CASES.filter((testCase) => (!ids || ids.includes(testCase.id)) && (!flags.only || testCase.harness === flags.only));
@@ -404,12 +409,18 @@ async function main() {
 			runs = runs.filter((run) => run.harness === 'scripted' || run.rep === rep);
 			meta.reps = 1;
 		}
+		const from = flags['cases-from'];
 		const notes = [
 			saved.meta.filter,
 			flags.rep && `live rep ${flags.rep} of ${saved.meta.reps} only`,
 			flags.cases && `cases: ${flags.cases}`,
+			from && `cases: the ${ids.size} in ${from.split('/').at(-1)}`,
 		];
-		if (flags.rep || flags.cases) meta.filter = notes.filter(Boolean).join('; ');
+		if (flags.rep || flags.cases || from) {
+			meta.filter = notes.filter(Boolean).join('; ');
+			// Counted from what was kept, so a subset compares as the cases it holds.
+			meta.cases = caseCounts(runs);
+		}
 		if (flags.rejudge) {
 			for (const run of runs) for (const step of run.steps) delete step.judge;
 			await judgeAll(
@@ -419,8 +430,12 @@ async function main() {
 			meta.judge = { model: JUDGE_MODEL, floor: JUDGE_FLOOR, version: JUDGE_VERSION };
 		}
 		const suffix =
-			[flags.rejudge && 'rejudged', flags.rep && `rep${flags.rep}`, flags.cases && 'subset'].filter(Boolean).join('-') || 'regraded';
-		save(grade(meta, runs), flags.out ?? flags.regrade.replace(/\.json$/, `-${suffix}.json`));
+			[flags.rejudge && 'rejudged', flags.rep && `rep${flags.rep}`, (flags.cases || from) && 'subset'].filter(Boolean).join('-') ||
+			'regraded';
+		const out = flags.out ?? flags.regrade.replace(/\.json$/, `-${suffix}.json`);
+		// A regrade is always a copy: the original stays the record of its run.
+		if (resolve(out) === resolve(flags.regrade)) throw new Error('--out must differ from --regrade: a regrade never replaces the original');
+		save(grade(meta, runs), out);
 		return;
 	}
 
@@ -430,13 +445,11 @@ async function main() {
 			saved.runs.filter((run) => !run.incomplete),
 			typesafeKey(),
 		);
-		const count = (harness: string) => new Set(saved.runs.filter((run) => run.harness === harness).map((run) => run.caseId)).size;
 		const meta = metaFor({
 			...saved,
 			// Absent on checkpoints written before the flag was taken at the start.
 			dirty: saved.dirty ?? dirtyTree(),
-			live: count('live'),
-			scripted: count('scripted'),
+			...caseCounts(saved.runs),
 			filter: `resumed from ${flags.resume.split('/').at(-1)}`,
 		});
 		if (saved.incomplete) meta.incomplete = saved.incomplete;

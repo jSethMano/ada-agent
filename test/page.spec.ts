@@ -230,3 +230,66 @@ describe('buildPage', () => {
 		expect(() => build(results({ grading: { grader: 2, dataset: 'abc' } }))).toThrow('these results cannot share a page');
 	});
 });
+
+describe('a comparison table beside the historical one', () => {
+	const later = { grading: { grader: 3, dataset: 'new' } };
+	const config: PageConfig = {
+		runs: [{ label: 'baseline', file: 'old.json' }],
+		featured: [],
+		comparisons: [
+			{
+				id: 'since-rag',
+				title: 'Since the help articles',
+				runs: [
+					{ label: 'iteration 3, current labels', file: 'i3-current.json' },
+					{ label: 'iteration 4', file: 'i4-shared.json' },
+				],
+				newCases: { label: 'iteration 4', file: 'i4.json', caseIds: [CASE.id] },
+			},
+		],
+	};
+	const page = (files: Record<string, Results>) =>
+		buildPage({ config, cases: [CASE], files, generatedAt: 'now', source: { commit: 'c', dirty: false } });
+	const files = {
+		'old.json': results(),
+		'i3-current.json': results(later),
+		'i4-shared.json': results(later),
+		'i4.json': results(later, [1, 2]),
+	};
+
+	it('checks and describes each table under its own answer key, and reports the new cases apart', () => {
+		const built = page(files);
+		expect(built.method.grading).toEqual({ grader: 1, dataset: 'abc' });
+		expect(built.comparisons).toHaveLength(1);
+		const [comparison] = built.comparisons!;
+		expect(comparison).toMatchObject({ id: 'since-rag', method: { cases: 1, grading: { grader: 3, dataset: 'new' } } });
+		expect(comparison.runs.map((run) => run.label)).toEqual(['iteration 3, current labels', 'iteration 4']);
+		expect(comparison.newCases).toMatchObject({
+			file: 'i4.json',
+			retrieval: { passed: 0, graded: 0, ungraded: 0 },
+			cases: [{ caseId: CASE.id, passed: 2, runs: 2 }],
+		});
+	});
+
+	it('leaves the page as it was when there is none', () => {
+		expect(
+			buildPage({
+				config: { ...config, comparisons: undefined },
+				cases: [CASE],
+				files,
+				generatedAt: 'now',
+				source: { commit: 'c', dirty: false },
+			}),
+		).not.toHaveProperty('comparisons');
+	});
+
+	it('refuses a comparison whose runs, or new cases, were graded under different keys', () => {
+		expect(() => page({ ...files, 'i4-shared.json': results({ grading: { grader: 3, dataset: 'other' } }) })).toThrow(
+			'since-rag: iteration 4',
+		);
+		expect(() => page({ ...files, 'i4.json': results() })).toThrow('since-rag: since-rag new cases');
+		expect(() => page({ ...files, 'i4-shared.json': results({ ...later, cases: { live: 2, scripted: 0 } }) })).toThrow(
+			'different case counts',
+		);
+	});
+});

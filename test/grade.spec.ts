@@ -1,7 +1,16 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { CASES } from '../evals/cases';
-import { driveCase, isQuotaExhausted, turnFailures, type CaseRun, type Sent, type StepRun, type WireRequest } from '../evals/drive';
+import {
+	caseCounts,
+	driveCase,
+	isQuotaExhausted,
+	turnFailures,
+	type CaseRun,
+	type Sent,
+	type StepRun,
+	type WireRequest,
+} from '../evals/drive';
 import { renderReport, type Results } from '../evals/report';
 import { containsPhrase, createOutcome, gradeCase, responseProblems, summarize, traceRowProblems, type CaseGrade } from '../evals/grade';
 import type { EvalCase, StepExpectation } from '../evals/types';
@@ -612,6 +621,14 @@ describe('summary', () => {
 		const scriptedSummary = summarize([scripted], [scriptedRun], [gradeCase(scripted, scriptedRun)]);
 		expect(scriptedSummary.metrics.outcome.graded).toBe(0);
 		expect(scriptedSummary.metrics.failure_handling).toEqual({ passed: 1, graded: 1, ungraded: 0 });
+	});
+});
+
+describe('caseCounts', () => {
+	it('counts distinct cases by harness, not runs, so a regraded subset describes what it holds', () => {
+		const run = (caseId: string, harness: 'live' | 'scripted', rep = 1): CaseRun => ({ ...runOf([]), caseId, harness, rep });
+		expect(caseCounts([run('a', 'live'), run('a', 'live', 2), run('b', 'live'), run('c', 'scripted')])).toEqual({ live: 2, scripted: 1 });
+		expect(caseCounts([])).toEqual({ live: 0, scripted: 0 });
 	});
 });
 
