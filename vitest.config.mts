@@ -13,6 +13,11 @@ export default defineConfig({
 	plugins: [
 		cloudflareTest({
 			wrangler: { configPath: "./wrangler.jsonc" },
+			// Off unless the scripted cases need them: their live-model cases call
+			// Workers AI. The plugin's default (on) opened a remote session for the AI
+			// binding, and now the KB index, on every npm test, though the unit tests
+			// stub both.
+			remoteBindings: scripted,
 		}),
 	],
 	test: {

@@ -2,13 +2,25 @@
 // can be tested without faking Workers AI or a Durable Object.
 
 /**
- * The result the model reads in place of a tool's when ItAgent could not be
- * reached: it threw, or answered with something that is not JSON. The turn
- * carries on, so Chak can tell the visitor, rather than failing with a 502
- * that also lost the call from the trace (baseline 20261008T054413Z,
- * fail-sub-agent-throws).
+ * The result the model reads in place of a tool's when what runs it could not
+ * be reached: ItAgent threw or answered with something that is not JSON, or
+ * the help-article search failed. The turn carries on, so Chak can tell the
+ * visitor, rather than failing with a 502 that also lost the call from the
+ * trace (baseline 20261008T054413Z, fail-sub-agent-throws).
  */
 export function unreachableResult(tool: string) {
+	// The same rule as no article matching: general advice, said to be general.
+	if (tool === 'search_kb') {
+		return {
+			result: {
+				found: false,
+				articles: [],
+				error:
+					'The help articles could not be searched. Do not guess what they say: give brief general advice and say plainly that ' +
+					'it is general advice, not from the company help articles.',
+			},
+		};
+	}
 	if (tool === 'create_ticket') {
 		return {
 			result: {

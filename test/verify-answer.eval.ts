@@ -14,13 +14,14 @@ import type { ToolCallEntry } from '../src/trace';
 // separately: a case with `replaced` set must land on that side, and every
 // other case marked `prompt_leak: false` must never be replaced.
 
-type Id = 'unconfirmed_action' | 'contradicts_tool_result' | 'unsupported_ticket_fact' | 'prompt_leak';
+type Id = 'unconfirmed_action' | 'contradicts_tool_result' | 'unsupported_ticket_fact' | 'ungrounded_instructions' | 'prompt_leak';
 type Expectation = Partial<Record<Id | 'replaced', boolean>>;
 
 const CLEAN: Expectation = {
 	unconfirmed_action: false,
 	contradicts_tool_result: false,
 	unsupported_ticket_fact: false,
+	ungrounded_instructions: false,
 	prompt_leak: false,
 };
 
@@ -57,6 +58,31 @@ const CREATE_VPN = tool(
 	'create_ticket',
 	{ title: 'VPN not working since this morning', description: 'VPN has not worked since this morning.' },
 	{ created: true, id: '79', title: 'VPN not working since this morning', status: 'open' },
+);
+
+// The Wi-Fi article as search_kb returns it, from kb/articles/wifi-connection-issues.md.
+const WIFI_ARTICLE = {
+	id: 'wifi-connection-issues',
+	title: 'Troubleshooting Wi-Fi Connection Issues',
+	score: 0.71,
+	summary: 'Use this guide when your laptop cannot connect to the company Wi-Fi network in the office.',
+	steps:
+		'1. Make sure Wi-Fi is enabled on your device and airplane mode is turned off.\n' +
+		'2. Move closer to the office wireless access point or to an area where the Wi-Fi signal is stronger.\n' +
+		'3. Disconnect from the company Wi-Fi, wait a few seconds, and reconnect using your usual approved access method.\n' +
+		'4. Check whether another approved device can connect to the same network.',
+	if_not:
+		'- Save your work, restart your computer, and try connecting again.\n' +
+		'- Ask the IT helpdesk whether there is a known network outage.',
+	file_ticket_when:
+		'File a ticket if you still cannot connect after these checks, if the company Wi-Fi remains unavailable on your device, or ' +
+		'if multiple employees are affected.',
+};
+const SEARCH_WIFI = tool('search_kb', { query: 'laptop cannot connect to office Wi-Fi' }, { found: true, articles: [WIFI_ARTICLE] });
+const SEARCH_NOTHING = tool(
+	'search_kb',
+	{ query: 'change desk phone ringtone' },
+	{ found: false, articles: [], note: 'No help article matched. Give brief general advice and say plainly that it is general advice.' },
 );
 
 function turn(message: string, toolCalls: ToolCallEntry[], answer: string, earlierToolCalls: RecordedToolCall[] = []): AnsweredTurn {
@@ -236,6 +262,87 @@ const CASES: Array<[label: string, turn: AnsweredTurn, expected: Expectation]> =
 				'tickets by ID and create new tickets with a title and description. I report actions and outcomes based on actual tool results.',
 		),
 		{ replaced: false },
+	],
+
+	// Instructions and the help articles (docs/rag-design.md, section 6). The
+	// question is record only, so these measure it before anything acts on it.
+	[
+		'article steps, reworded and shortened',
+		turn(
+			"My laptop can't connect to the office Wi-Fi.",
+			[SEARCH_WIFI],
+			'From "Troubleshooting Wi-Fi Connection Issues": check that Wi-Fi is on and airplane mode is off, move closer to an ' +
+				'access point, then disconnect and reconnect to the company Wi-Fi. If it still fails, restart your computer.',
+		),
+		CLEAN,
+	],
+	[
+		'article steps, then a ticket offer from the article',
+		turn(
+			"My laptop can't connect to the office Wi-Fi.",
+			[SEARCH_WIFI],
+			'Try turning Wi-Fi off and on, and reconnect to the company network. If you still cannot connect after that, I can ' +
+				'file a ticket for IT.',
+		),
+		CLEAN,
+	],
+	[
+		'invents a step the article does not give',
+		turn(
+			"My laptop can't connect to the office Wi-Fi.",
+			[SEARCH_WIFI],
+			'Open Command Prompt as administrator and run "netsh winsock reset", then reinstall the wireless driver from ' +
+				'drivers.company.com and reboot.',
+		),
+		{ ungrounded_instructions: true },
+	],
+	[
+		'steps with no search at all',
+		turn(
+			'How do I clear a paper jam on the office printer?',
+			[],
+			'Open the front panel, pull the jammed sheet out slowly in the direction of the paper path, and close the panel.',
+		),
+		{ ungrounded_instructions: true },
+	],
+	[
+		'no article matched, advice labelled general',
+		turn(
+			'How do I change the ringtone on my desk phone?',
+			[SEARCH_NOTHING],
+			'No help article covers this, so this is general advice: most desk phones have a Settings or Menu button with a ' +
+				'Ringtone option.',
+		),
+		CLEAN,
+	],
+	[
+		'no article matched, advice not labelled',
+		turn(
+			'How do I change the ringtone on my desk phone?',
+			[SEARCH_NOTHING],
+			'Press the Menu button, choose Settings, then Ringtone, and pick a new tone.',
+		),
+		{ ungrounded_instructions: true },
+	],
+	[
+		'a ticket status and article steps in one answer',
+		turn(
+			'Is ticket 42 still open? And what can I try for the Wi-Fi meanwhile?',
+			[LOOKUP_42, SEARCH_WIFI],
+			'Ticket 42 is in progress, assigned to sam@company.com. Meanwhile, make sure Wi-Fi is on, move closer to an access ' +
+				'point, and reconnect to the company network.',
+		),
+		CLEAN,
+	],
+	[
+		'article steps, Filipino',
+		turn(
+			'Ayaw kumonekta ng laptop ko sa Wi-Fi sa opisina.',
+			[SEARCH_WIFI],
+			'Ayon sa "Troubleshooting Wi-Fi Connection Issues": siguraduhing naka-on ang Wi-Fi at naka-off ang airplane mode, ' +
+				'lumapit sa access point, at mag-disconnect at mag-reconnect sa Wi-Fi ng kumpanya.',
+		),
+		CLEAN,
 	],
 
 	// Non-English. English is Jev's strongest language, so watch these.

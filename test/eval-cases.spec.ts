@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { CASES, FIXTURES, LEAK_MARKERS, OVER_LIMIT_TITLE, OVERSIZED_TICKET_ID, PATH_TICKET_ID } from '../evals/cases';
+import { CASES, FIXTURES, LEAK_MARKERS, OVER_LIMIT_TITLE, OVERSIZED_TICKET_ID, PATH_TICKET_ID, POISONED_ARTICLE } from '../evals/cases';
 import {
 	CATEGORIES,
 	FAULTS,
@@ -14,12 +14,21 @@ import {
 	type StepExpectation,
 	type ToolCallMatcher,
 } from '../evals/types';
+import { aiAddressedLines, checkArticle } from '../kb/articles';
 import { parseDecision, TICKET_LIMITS } from '../src/approval';
 import { SECRET_NOTICE } from '../src/secret-notice';
 import { SYSTEM_PROMPT } from '../src/system-prompt';
 import { textToolCall } from '../src/text-tool-call';
 import readme from '../README.md?raw';
 import workerSource from '../src/index.ts?raw';
+
+// The help articles search_kb can return, by id (the file name without .md).
+const ARTICLES = Object.fromEntries(
+	Object.entries(import.meta.glob<string>('../kb/articles/*.md', { query: '?raw', import: 'default', eager: true })).map(([path, text]) => [
+		path.split('/').at(-1)!.replace(/\.md$/, ''),
+		text,
+	]),
+);
 
 // The end-to-end eval dataset (evals/cases.ts) is graded against live
 // responses later, by a runner that cannot tell a wrong label from a wrong
@@ -117,9 +126,10 @@ describe('eval dataset', () => {
 		expect(MAX_TICKET_ID_LENGTH).toBeGreaterThan(0);
 	});
 
-	it('has 40 to 50 cases, each with a unique kebab-case id and a one-line why', () => {
+	// 50 until the help-article cases, which added 6.
+	it('has 40 to 60 cases, each with a unique kebab-case id and a one-line why', () => {
 		expect(CASES.length).toBeGreaterThanOrEqual(40);
-		expect(CASES.length).toBeLessThanOrEqual(50);
+		expect(CASES.length).toBeLessThanOrEqual(60);
 		const ids = CASES.map((testCase) => testCase.id);
 		expect(new Set(ids).size).toBe(ids.length);
 		for (const testCase of CASES) {
@@ -235,6 +245,20 @@ describe('eval dataset', () => {
 		}
 	});
 
+	it('expects only help articles that exist, each one an article kb:check accepts', () => {
+		const hits = STEPS.flatMap(({ testCase, step }) =>
+			expectationsOf(step).flatMap((expectation) =>
+				callsOf(expectation).flatMap((call) => (call.tool === 'search_kb' && call.hit !== undefined ? [{ testCase, hit: call.hit }] : [])),
+			),
+		);
+		expect(hits.length).toBeGreaterThanOrEqual(5);
+		for (const { testCase, hit } of hits) {
+			if (testCase.harness === 'scripted' && testCase.fault === 'kb_poisoned') continue;
+			expect(Object.keys(ARTICLES), `${testCase.id} expects ${hit}`).toContain(hit);
+			expect(checkArticle(`${hit}.md`, ARTICLES[hit]).problems, hit).toEqual([]);
+		}
+	});
+
 	it('expects a 409 only from a decision, and a 5xx only from a scripted failure', () => {
 		for (const { testCase, step } of STEPS) {
 			if (step.expect.outcome !== 'error') continue;
@@ -344,6 +368,13 @@ describe('scripted failures', () => {
 		const testCase = scriptedFor('model_never_stops');
 		expect(testCase.model !== 'live' && testCase.model.repeatLast).toBe(true);
 		expect(callsOf(testCase.steps[0].expect)).toHaveLength(MAX_ITERATIONS);
+	});
+
+	it('plant an article kb:check would refuse, and never one of the real ones, for the poisoned-index fault', () => {
+		const testCase = scriptedFor('kb_poisoned');
+		expect(callsOf(testCase.steps[0].expect)).toContainEqual(expect.objectContaining({ tool: 'search_kb', hit: POISONED_ARTICLE.id }));
+		expect(Object.keys(ARTICLES)).not.toContain(POISONED_ARTICLE.id);
+		expect(aiAddressedLines(POISONED_ARTICLE.metadata.steps).length).toBeGreaterThan(0);
 	});
 
 	it('throw from the model for the Workers AI fault', () => {

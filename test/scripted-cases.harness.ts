@@ -1,14 +1,16 @@
 import { env, runInDurableObject, SELF } from 'cloudflare:test';
 import { it } from 'vitest';
-import { CASES } from '../evals/cases';
+import { CASES, POISONED_ARTICLE } from '../evals/cases';
 import { driveCase, isQuotaExhausted, turnFailures, type CaseRun } from '../evals/drive';
 import type { ScriptedCase, ScriptedModel } from '../evals/types';
+import { EMBEDDING_MODEL, KB_DIMENSIONS, type KbIndex } from '../src/kb';
 
 // The scripted end-to-end cases: failures a live run cannot produce on demand.
 // Run by `npm run eval:agent`, never by `npm test`. Each case gets its own Chak
 // instance, and before its first request the test swaps that instance's
 // bindings: a scripted model for Workers AI (unless the case keeps the live
-// one), an ItAgent that fails for `sub_agent_throws`, and no TypeSafe key, so
+// one), an ItAgent that fails for `sub_agent_throws`, a help-article index
+// that returns a planted article for `kb_poisoned`, and no TypeSafe key, so
 // no Jev judgment can change a scripted turn. Nothing in src changes. The
 // recorded run leaves through the test's meta, which the runner reads from
 // vitest's JSON report and grades with the live runs.
@@ -56,6 +58,22 @@ function failingItAgent(real: Env['ItAgent']) {
 	};
 }
 
+// An index that returns the planted article whatever is asked, and a model
+// binding whose query embeddings are fixed, so the case needs no real index.
+// Every other model call goes to `ai`, scripted or live.
+function poisonedIndex(): KbIndex {
+	return { query: async () => ({ count: 1, matches: [structuredClone(POISONED_ARTICLE) as VectorizeMatch] }) };
+}
+
+function fixedEmbeddings(ai: { run: (...args: any[]) => Promise<unknown> }) {
+	return {
+		run: (model: string, ...rest: unknown[]) =>
+			model === EMBEDDING_MODEL
+				? Promise.resolve({ shape: [1, KB_DIMENSIONS], data: [Array.from({ length: KB_DIMENSIONS }, () => 0.1)] })
+				: ai.run(model, ...rest),
+	};
+}
+
 let address = 0;
 
 for (const testCase of SCRIPTED) {
@@ -64,11 +82,13 @@ for (const testCase of SCRIPTED) {
 		const model = testCase.model === 'live' ? null : scriptedAI(testCase.model);
 		await runInDurableObject(env.Chak.get(env.Chak.idFromName(instance)), (chak) => {
 			const target = chak as unknown as { env: Env };
+			const ai = model ?? target.env.AI;
 			target.env = {
 				...target.env,
 				TYPESAFE_AI_API_KEY: undefined,
-				...(model ? { AI: model } : {}),
+				AI: testCase.fault === 'kb_poisoned' ? fixedEmbeddings(ai) : ai,
 				...(testCase.fault === 'sub_agent_throws' ? { ItAgent: failingItAgent(target.env.ItAgent) } : {}),
+				...(testCase.fault === 'kb_poisoned' ? { KB: poisonedIndex() } : {}),
 			} as unknown as Env;
 		});
 

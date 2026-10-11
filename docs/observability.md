@@ -104,7 +104,7 @@ One JSON line per event, written by `src/index.ts` and `src/jev/run-check.ts`. N
 | `tool_call.from_text` | The router parses a call from the reply's text | `instance`, `tool` |
 | `answer.replaced` | verify_answer's leak rule fires | `instance`, `rule: 'prompt_leak'` |
 | `model.retried` | A dropped Workers AI connection is retried | `instance`, `detail` |
-| `tool.failed` (error) | ItAgent throws or answers with something that isn't JSON | `instance`, `tool`, `detail` |
+| `tool.failed` (error) | ItAgent throws or answers with something that isn't JSON, or a `search_kb` call fails (including no `KB` binding) | `instance`, `tool`, `detail` |
 | `turn.failed` (error) | The turn ends in a 502 | `instance`, `detail` |
 
 ## Debugging a turn

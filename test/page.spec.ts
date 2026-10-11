@@ -209,6 +209,23 @@ describe('buildPage', () => {
 		expect(page.featured[0].before.caseRuns).toEqual({ passed: 1, total: 1 });
 	});
 
+	it('describes only the cases the runs sent, and only the metrics they report', () => {
+		const added = { ...CASE, id: 'added-later' };
+		const older = results();
+		delete (older.summary.metrics as Partial<typeof older.summary.metrics>).retrieval;
+		const page = buildPage({
+			config,
+			cases: [CASE, added],
+			files: { 'results/a.json': older, 'results/b.json': results() },
+			generatedAt: 'now',
+			source: { commit: 'c', dirty: false },
+		});
+		expect(page.method.cases).toBe(1);
+		expect(page.method.metrics.map(({ id }) => id)).not.toContain('retrieval');
+		expect(page.runs[0].metrics).not.toHaveProperty('retrieval');
+		expect(build(results()).method.metrics.map(({ id }) => id)).toContain('retrieval');
+	});
+
 	it('refuses, loudly, a featured side graded differently from the table', () => {
 		expect(() => build(results({ grading: { grader: 2, dataset: 'abc' } }))).toThrow('these results cannot share a page');
 	});

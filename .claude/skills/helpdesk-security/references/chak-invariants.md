@@ -17,18 +17,21 @@ Severity: **critical** (a visitor can act or read beyond their conversation, or 
 - `filedBy` comes from the router (`this.name`), passed alongside the model's arguments, **never inside them**. A model-supplied `filedBy`, `triage`, or `priority` must never reach `ItAgent`. (`dispatchTool`'s `extra`)
 - `list_my_tickets` without a `filedBy` returns nothing, not everything. `filedBy` is never returned to a client. (`ItAgent.onRequest`)
 - `list_tickets` is router-only: it isn't in `TOOLS` or `TOOL_ROUTING`, so the model can't call it.
+- A tool the router runs itself (`LOCAL_TOOLS`, `src/index.ts`: today `search_kb`) gets the model's arguments only, never `extra`, and keeps no state. If one ever needs to know who is asking, it becomes a sub-agent call with router-supplied identity instead.
+- Only help articles are ever indexed, never tickets. Every visitor searches the same index, so an ingested ticket could be shown to another visitor.
 - The `{instance}` in the URL is the conversation's only key. Clients must use unguessable ids.
 
 ## Untrusted content
 
 - User messages go into history inside `envelope('user_input', …)`, and tool results inside `envelope('tool_result', …)`. A closing tag inside the payload gets escaped. (`src/history.ts`)
+- Help-article text reaches the model only as a `search_kb` tool result, so it is enveloped like any other. `npm run kb:check` refuses an article with lines addressed to an AI, links off example.com, or credential-looking strings before ingest; that backs up review, it does not replace it.
 - In Jev checks, visitor text goes in `state` and never inside a question's wording. Choice labels are ids that `ItAgent` assigns. Visitor-written titles never become a label. (`CheckSpec`, `sameIssueAs`)
 - The system prompt says to treat everything inside the tags as data. Changing that text changes the defense. Re-run `npm run eval` afterwards.
 
 ## Model output
 
 - Only structured tool calls act. Recovering a call written as text is strict: an exact tool name, and arguments that fully parse. A tool name mentioned in prose is never a call. (`src/text-tool-call.ts`)
-- Malformed JSON arguments go back to the model as an error result instead of throwing. Unknown tools get an error result. So does a sub-agent that throws or answers with something that is not JSON (`unreachableResult`, `src/failures.ts`): the call stays in the trace, and the turn does not 502.
+- Malformed JSON arguments go back to the model as an error result instead of throwing. Unknown tools get an error result. So does a sub-agent that throws or answers with something that is not JSON, and a help-article search that fails or has no index bound (`unreachableResult`, `src/failures.ts`): the call stays in the trace, and the turn does not 502.
 - A Workers AI call is retried once, and only for a dropped connection (`isDroppedConnection`). Model errors are never retried.
 - A `lookup_ticket` whose `ticket_id` has no digit is answered by the router, never sent to `ItAgent` (`isTicketNumber`, `src/tool-guards.ts`). Calls parsed from text take the same path.
 - `ItAgent` validates every argument itself: `ticket_id` at most 32 chars, a title of 1–200 chars, a description of at most 4000 chars. The router checks `create_ticket` arguments against the same limits before triage (`checkTicketArgs`), and an edited decision is held to them by `parseDecision`. (`TICKET_LIMITS`, `src/approval.ts`)

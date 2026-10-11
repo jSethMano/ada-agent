@@ -21,7 +21,7 @@ import triageSkill from '../.claude/skills/ticket-triage/SKILL.md?raw';
 // the skill to match, not the other way round.
 
 const SKILLS = import.meta.glob<string>('../.claude/skills/**/*.md', { query: '?raw', import: 'default', eager: true });
-const SOURCES = import.meta.glob<string>(['../src/**/*.ts', '../evals/**/*.ts', './*.ts'], {
+const SOURCES = import.meta.glob<string>(['../src/**/*.ts', '../evals/**/*.ts', '../kb/**/*.ts', './*.ts'], {
 	query: '?raw',
 	import: 'default',
 	eager: true,
@@ -48,7 +48,7 @@ function checked(noul: Record<string, number>): CheckEntry {
 describe('every skill', () => {
 	it('names only source files that exist', () => {
 		for (const [skill, text] of Object.entries(SKILLS)) {
-			for (const [, path] of text.matchAll(/`((?:src|test|evals)\/[\w./-]+\.ts)`/g)) {
+			for (const [, path] of text.matchAll(/`((?:src|test|evals|kb)\/[\w./-]+\.ts)`/g)) {
 				expect(source(path), `${skill} names ${path}`).toBeDefined();
 			}
 		}
@@ -57,7 +57,7 @@ describe('every skill', () => {
 	it('lists touchpoints whose symbols are still in the file it names', () => {
 		let rows = 0;
 		for (const [skill, text] of Object.entries(SKILLS)) {
-			for (const [, path, symbol] of text.matchAll(/^\| `((?:src|test|evals)\/[\w./-]+\.ts)` \| `(\w+)` \|/gm)) {
+			for (const [, path, symbol] of text.matchAll(/^\| `((?:src|test|evals|kb)\/[\w./-]+\.ts)` \| `(\w+)` \|/gm)) {
 				rows++;
 				expect(source(path), `${skill} names ${path}`).toBeDefined();
 				expect(source(path), `${skill}: ${symbol} is no longer in ${path}`).toContain(symbol);

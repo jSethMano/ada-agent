@@ -2,12 +2,14 @@ import { env, runInDurableObject, SELF } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { isQuotaExhausted, turnFailures } from '../evals/drive';
 import { TICKET_LIMITS } from '../src/approval';
+import { EMBEDDING_MODEL, KB_DIMENSIONS, KB_SECTIONS, type KbIndex } from '../src/kb';
 
 // Whole turns through the public route with Workers AI replaced by a script and,
-// where a test says so, an ItAgent that throws. The instance's bindings are
-// swapped before its first request, and the TypeSafe key is removed, so these
-// run without the network. The scripted cases in test/scripted-cases.harness.ts
-// use the same technique for the end-to-end eval.
+// where a test says so, an ItAgent that throws or a help-article index stub.
+// The instance's bindings are swapped before its first request, and the
+// TypeSafe key is removed, so these run without the network. The scripted
+// cases in test/scripted-cases.harness.ts use the same technique for the
+// end-to-end eval.
 
 type Reply = { choices: Array<{ message: { content: string; tool_calls?: unknown[] } }> } | Error;
 
@@ -22,17 +24,24 @@ const text = (content: string): Reply => ({ choices: [{ message: { content } }] 
 
 let instances = 0;
 
-async function chak(replies: Reply[], opts: { failItAgent?: boolean } = {}) {
+async function chak(replies: Reply[], opts: { failItAgent?: boolean; kb?: KbIndex } = {}) {
 	const instance = `turn-spec-${++instances}`;
 	let modelCalls = 0;
+	// What the model was sent on each pass, so a test can see what it read.
+	const sent: Array<{ messages: Array<{ role: string; content: string }> }> = [];
 	await runInDurableObject(env.Chak.get(env.Chak.idFromName(instance)), (agent) => {
 		const target = agent as unknown as { env: Env };
 		const real = target.env.ItAgent;
 		target.env = {
 			...target.env,
 			TYPESAFE_AI_API_KEY: undefined,
+			// Always set, so no test reaches the pool's own binding to the real index.
+			KB: opts.kb,
 			AI: {
-				run: async () => {
+				run: async (model: string, input: { messages: Array<{ role: string; content: string }> }) => {
+					// A search's query embedding is not a model pass.
+					if (model === EMBEDDING_MODEL) return { shape: [1, KB_DIMENSIONS], data: [Array.from({ length: KB_DIMENSIONS }, () => 0.1)] };
+					sent.push(input);
 					const reply = replies[modelCalls++];
 					if (!reply) throw new Error('no scripted reply left');
 					if (reply instanceof Error) throw reply;
@@ -62,7 +71,7 @@ async function chak(replies: Reply[], opts: { failItAgent?: boolean } = {}) {
 		});
 		return { status: response.status, body: (await response.json()) as Record<string, any> };
 	};
-	return { send, modelCalls: () => modelCalls };
+	return { send, modelCalls: () => modelCalls, sent };
 }
 
 const rows = (body: Record<string, any>, kind: string) => (body.trace as Array<Record<string, any>>).filter((row) => row.kind === kind);
@@ -169,5 +178,71 @@ describe('a dropped Workers AI connection', () => {
 		const other = await chak([new Error('AiError: 5006: Invalid input'), text('unused')]);
 		expect((await other.send({ question: 'What makes a strong password?' })).status).toBe(502);
 		expect(other.modelCalls()).toBe(1);
+	});
+});
+
+describe('search_kb', () => {
+	const article = {
+		id: 'vpn-connection-failure',
+		score: 0.74,
+		metadata: {
+			title: 'Troubleshooting VPN Connection Failures',
+			category: 'network',
+			...Object.fromEntries(KB_SECTIONS.map(({ field }) => [field, `The ${field} of the VPN article.`])),
+		},
+	};
+
+	it('runs in the router, and its articles reach the model as an enveloped tool result', async () => {
+		const queries: number[][] = [];
+		const kb: KbIndex = {
+			query: async (vector) => {
+				queries.push(vector);
+				return { count: 1, matches: [article] };
+			},
+		};
+		// The failing ItAgent proves no sub-agent is involved.
+		const turn = await chak([toolCall('search_kb', { query: 'vpn will not connect' }), text('Reconnect the VPN.')], {
+			kb,
+			failItAgent: true,
+		});
+		const { status, body } = await turn.send({ question: 'My VPN will not connect from home' });
+		expect(status).toBe(200);
+		expect(queries).toHaveLength(1);
+		const [search] = rows(body, 'tool');
+		expect(search).toMatchObject({ tool: 'search_kb', args: { query: 'vpn will not connect' }, result: { result: { found: true } } });
+		expect(search.result.result.articles[0]).toMatchObject({ id: 'vpn-connection-failure', steps: 'The steps of the VPN article.' });
+		expect(rows(body, 'check').map((row) => row.check)).toEqual(['input_guard', 'verify_answer']);
+
+		const toolMessage = turn.sent[1].messages.find((message) => message.role === 'tool');
+		expect(toolMessage?.content.startsWith('<tool_result>\n')).toBe(true);
+		expect(toolMessage?.content).toContain('Troubleshooting VPN Connection Failures');
+	});
+
+	it('gives the model an error result when the index is not bound, and the turn still answers', async () => {
+		const logged: string[] = [];
+		const consoleError = console.error;
+		console.error = (...args: unknown[]) => logged.push(args.map(String).join(' '));
+		const turn = await chak([toolCall('search_kb', { query: 'vpn will not connect' }), text('In general, try reconnecting.')]);
+		let response;
+		try {
+			response = await turn.send({ question: 'My VPN will not connect from home' });
+		} finally {
+			console.error = consoleError;
+		}
+		expect(response.status).toBe(200);
+		const [search] = rows(response.body, 'tool');
+		expect(search.result.result).toMatchObject({ found: false, articles: [] });
+		expect(search.result.result.error).toContain('could not be searched');
+		// Logged as a misconfiguration, without the query.
+		expect(logged.join('\n')).toContain('"event":"tool.failed"');
+		expect(logged.join('\n')).not.toContain('vpn will not connect');
+	});
+});
+
+describe('a call to a tool Chak does not have', () => {
+	it('is unknown even when its name is a property every object has', async () => {
+		const turn = await chak([toolCall('constructor', {}), text('I cannot do that.')]);
+		const { body } = await turn.send({ question: 'Please do the thing' });
+		expect(rows(body, 'tool')[0].result).toEqual({ error: 'Unknown tool: constructor' });
 	});
 });

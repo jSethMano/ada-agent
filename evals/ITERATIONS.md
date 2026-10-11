@@ -297,6 +297,50 @@ Model passes per step stayed at a median of 1. Jev time is unchanged, so the inc
 
 A missing approval notice now reads "no notice on the card" instead of "not text". Pass and fail are unchanged, so the grader version and stamp are unchanged. The regraded files that carried the old text were regraded again without re-judging (the baseline, iteration 1, and iteration 2 `-iter3-labels` files). Every number in them is identical; only the failure text changed. Iteration 3's own file had no such detail and was not touched.
 
+## Help-article search: built, not yet run (2026-10-11)
+
+The `search_kb` tool is built (docs/rag-design.md), and the `chak-kb` index was created and filled with the 15 articles on 2026-10-11. The user is holding the first run, so there is none yet. This entry records the dataset and grader changes, so the first run under them can be read against them.
+
+### What changed in the code
+- **A new tool.** `search_kb` runs in the router and searches the help articles in `kb/articles`.
+- **Prompt and tool descriptions.** How-to and troubleshooting questions, and problems described without a ticket request, are searched first and answered from the article that fits. When no article fits, Chak gives general advice and says so (user decisions, 2026-10-11).
+- **A new record-only question.** `verify_answer` asks `ungrounded_instructions`. The Jev eval separates grounded answers (0.02–0.13) from ungrounded ones (0.94–0.98).
+
+### Label changes driven by the new capability (not corrections)
+These follow the new behavior, so they are **not** applied to earlier runs. Earlier runs stay graded under grader 1 and their old labels.
+
+| Case | Was | Now | Why |
+| --- | --- | --- | --- |
+| `it-wifi-cant-connect` | a ticket proposal | answered, `search_kb` with hit `wifi-connection-issues`, no `create_ticket` | Decision 2: a described problem gets the article's steps first. The Wi-Fi article's "When to file a ticket" needs the steps tried first |
+| `it-strong-password` | answered, no tool | answered, `search_kb` required, advice labelled general | A how-to question is searched first, and no article covers strong passwords (decision 1) |
+| `it-printer-paper-jam` | answered, no tool, no portal or link | answered, `search_kb` with hit `printer-not-printing`, no `create_ticket`, still no portal or link | The same. The printer article names no portal or link |
+| `it-vpn-what-is` | answered, no tool | answered, `search_kb` optional, no ticket tool | Not a how-to or a fault, so a search is allowed, not required |
+| `ticket-lookup-42`, `ticket-my-tickets-fresh` | | `search_kb` forbidden | A ticket question needs no article |
+
+The out-of-scope cases and the greeting already expect `tools: 'none'`, which rules out a search.
+
+**Still a ticket proposal.** Each of these asks for a ticket, or for something only IT can do:
+- `it-software-install`: an install. A search is now optional, and when there is one it must find `request-approved-software-installation`;
+- `it-vpn-tagalog`: "pakigawan ng ticket";
+- `unsupported-reset-password`: a reset;
+- `unsupported-admin-rights`: access;
+- `unsupported-email-it`: contacting IT;
+- `ticket-security-stolen-laptop`: a stolen device;
+- every case that says "file a ticket" or "log it".
+
+The password-reset and software articles describe self-service routes, so watch whether Chak still proposes those tickets.
+
+### New cases (6), and the grader
+- **Live:**
+  - `kb-vpn-wont-connect`: a hit, and the article named;
+  - `kb-no-article`: labelled general advice;
+  - `kb-tagalog`: Tagalog that no keyword uses;
+  - `kb-misspelled`;
+  - `kb-escalation`: the steps already tried, so a ticket proposal.
+- **Scripted:** `fail-kb-poisoned-article` (fault `kb_poisoned`). A stubbed index returns an article with an instruction planted in its steps.
+- **The grader.** It adds `retrieval` (hit@3) and the `search_kb` matcher, so `GRADER_VERSION` is 2. Results graded under 1 cannot share a page with results graded under 2.
+- **The page.** It describes only the cases and metrics a run has, so the current page still exports. Its one difference is `it-printer-paper-jam`'s `why`, which now describes searching. Re-export only after a run under these labels.
+
 ## Commands
 
 To regenerate the page data after a new run, list the run in `page.config.ts` and run:

@@ -113,7 +113,7 @@ One entry per decision: the context, what was decided and why, the evidence, and
 
 ### What gets a ticket proposal (2026-10-08, user decisions)
 - **Decisions:**
-  - A problem IT must fix gets a proposal (Wi-Fi).
+  - A problem IT must fix gets a proposal (Wi-Fi). Superseded on 2026-10-11 for problems described without a ticket request: see "Help articles first" below.
   - So does an action only IT can do (email IT, reset a password, grant admin rights), because the approval card is the ask.
   - "File 5 tickets" gets one.
   - Changing or closing an existing ticket is declined.
@@ -158,6 +158,40 @@ One entry per decision: the context, what was decided and why, the evidence, and
 ### Freeze at iteration 3 (2026-10-10, user decision)
 - **Decision:** Chak's behavior is frozen at iteration 3. There are no further prompt changes.
 - **Why:** overall was flat at 126/132 in iterations 2 and 3, and prompt tuning was hitting diminishing returns: iteration 3 fixed the password case and lost runs on email and update-priority.
+
+## Help-article search (RAG, 2026-10-11)
+
+Indexed on 2026-10-11 (15 articles in `chak-kb`, bound as `KB`), not yet measured. The design, with its evidence and options, is [rag-design.md](rag-design.md).
+
+### Articles only, through a search_kb tool, grounding record only (user decisions)
+- **Decisions:**
+  - Vectorize with bge-m3 embeddings (2026-10-06).
+  - Only help articles are searched, never past tickets.
+  - Retrieval is a `search_kb` tool the model calls.
+  - A grounding question in `verify_answer` records ungrounded steps and enforces nothing.
+- **Why:** every visitor shares one ticket store, so retrieving tickets could show one visitor another's. A tool shows in the trace and can be graded. Record first, then measure, as with every Jev line.
+
+### No article fits: general advice, labelled (user decision)
+- **Decision:** a brief general answer that says plainly it is general advice, not from the company's help articles.
+- **Evidence:** `kb-no-article`, and the `ungrounded_instructions` eval cases: labelled general advice scored 0.03, the same advice unlabelled 0.97.
+
+### Help articles first (user decision)
+- **Decision:** a problem described without a ticket request is searched first, and gets the article's steps. A ticket is proposed only when the article's "When to file a ticket" applies, or the visitor says the steps didn't work. A request only IT can fulfil (install, access, reset, a lost or stolen device) still gets a proposal at once, and so does an explicit ticket request.
+- **Label change:** `it-wifi-cant-connect` now expects an answer with the Wi-Fi article and no ticket. Earlier runs keep the old label: the change follows the new capability and is not a correction (`evals/ITERATIONS.md`).
+
+### Security incidents get a ticket at once (user decision, 2026-10-11)
+- **Decision:** a lost or stolen device and a security incident count as requests only IT can act on, so they are proposed as tickets right away, even with no ticket request and no article. This is the system prompt's IT-only list (`src/system-prompt.ts`).
+
+### No score floor until measured (user decision, 2026-10-11)
+- **Decision:** `MIN_SCORE` stays 0, so the 3 closest articles always come back and the model judges the fit. The floor is set from the first eval's scores, as every Jev line was.
+
+### search_kb runs in the router (user decision)
+- **Decision:** no new Durable Object. The router runs it itself (`LOCAL_TOOLS`), with the logic in `src/kb.ts`.
+- **Why:** it keeps no state, so a sub-agent would add a hop and a migration for nothing.
+
+### Ingest through the wrangler login (user decision)
+- **Decision:** `npm run kb:ingest` reaches Workers AI and Vectorize through wrangler's remote bindings (`getPlatformProxy` with `kb/wrangler.kb.jsonc`), so it uses the existing `wrangler login` and no API token is stored.
+- **Evidence:** in the installed wrangler (4.147.0), remote bindings authenticate with the stored OAuth access token, and its default scopes include `ai:write` and `vectorize:write`.
 
 ### Considered, not adopted yet
 - **Langfuse** as an eval and monitoring platform.

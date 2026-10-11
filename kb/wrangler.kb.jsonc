@@ -1,0 +1,11 @@
+// The bindings npm run kb:ingest uses, through wrangler's getPlatformProxy
+// (kb/ingest.ts). Never deployed: there is no `main`, and nothing else reads
+// this file. `remote: true` sends both to your Cloudflare account under your
+// `wrangler login`, so ingest needs no API token. The index is created once,
+// by hand: npx wrangler vectorize create chak-kb --dimensions 1024 --metric cosine
+{
+	"name": "chak-kb-ingest",
+	"compatibility_date": "2026-09-18",
+	"ai": { "binding": "AI", "remote": true },
+	"vectorize": [{ "binding": "KB", "index_name": "chak-kb", "remote": true }],
+}

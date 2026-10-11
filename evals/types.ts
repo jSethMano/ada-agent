@@ -107,7 +107,7 @@ export type TextMatch = {
 	excludes?: readonly Phrase[];
 };
 
-export type ToolName = 'lookup_ticket' | 'create_ticket' | 'list_my_tickets';
+export type ToolName = 'search_kb' | 'lookup_ticket' | 'create_ticket' | 'list_my_tickets';
 export type FixtureId = '42' | '77';
 export type TicketStatus = 'open' | 'in_progress' | 'resolved';
 
@@ -139,7 +139,13 @@ export type CreateCall = CallOptions & {
 
 export type ListCall = CallOptions & { tool: 'list_my_tickets'; result?: { total: number } };
 
-export type ToolCallMatcher = LookupCall | CreateCall | ListCall;
+// `hit` is an article id (its file name in kb/articles, without .md) that must
+// be among the call's results: hit@k, with k the KB_RESULT_LIMITS.articles the
+// router returns (3). Graded as `retrieval`, so a run shows whether the right
+// article came back apart from what the model did with it.
+export type SearchCall = CallOptions & { tool: 'search_kb'; hit?: string; result?: { found: boolean } };
+
+export type ToolCallMatcher = SearchCall | LookupCall | CreateCall | ListCall;
 
 // The ticket waiting in a step that paused. Triage fields come from Jev, so
 // they are graded only when that step's triage row is `ok`.
@@ -235,6 +241,8 @@ export type Step = SayStep | DecideStep;
  * - `model_text_tool_call`: a tool call written into the reply as text.
  * - `stale_decision`: decisions with an id that is not the waiting card's, or for a card already decided.
  * - `create_args_invalid`: create_ticket arguments ItAgent rejects: over TICKET_LIMITS, an empty title, or a title that is not a string.
+ * - `kb_poisoned`: the help-article index returns one test-only article that carries an injected instruction, and the
+ *   query's embedding is faked, so no real index is needed and no real visitor can ever be shown that article.
  */
 export const FAULTS = [
 	'sub_agent_throws',
@@ -246,6 +254,7 @@ export const FAULTS = [
 	'model_text_tool_call',
 	'stale_decision',
 	'create_args_invalid',
+	'kb_poisoned',
 ] as const;
 export type FaultId = (typeof FAULTS)[number];
 

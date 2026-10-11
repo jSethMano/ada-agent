@@ -6,6 +6,10 @@
 		"enabled": true,
 	},
 	"ai": { "binding": "AI" },
+	// The help-article index search_kb queries (src/kb.ts). Filled by npm run
+	// kb:ingest. Vectorize has no local simulator, so wrangler dev uses the real
+	// index; npm test turns remote bindings off (vitest.config.mts).
+	"vectorize": [{ "binding": "KB", "index_name": "chak-kb", "remote": true }],
 	"durable_objects": {
 		"bindings": [
 			// The binding name drives the URL: the agents SDK routes /agents/chak/{instance} here.

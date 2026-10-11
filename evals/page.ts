@@ -23,7 +23,9 @@ export type PageRunData = {
 	// Uncommitted code changes when the run started. Files graded before
 	// iteration 3 also count the runner's own result files here.
 	dirty: boolean;
-	metrics: Record<Metric | 'overall', PageTally>;
+	// The metrics in `method.metrics`: one added to the grader after these runs
+	// (retrieval, grader 2) is left out rather than shown as zero.
+	metrics: Partial<Record<Metric | 'overall', PageTally>>;
 	categories: Partial<Record<Category, { passed: number; graded: number }>>;
 	fromText: { live: number; scripted: number };
 	replaced: number;
@@ -191,7 +193,7 @@ function sideView(results: Results, caseId: string, side: PageSide): PageSideDat
 	};
 }
 
-function runView(label: string, file: string, results: Results): PageRunData {
+function runView(label: string, file: string, results: Results, shown: ReadonlyArray<Metric | 'overall'>): PageRunData {
 	const { meta, summary } = results;
 	const tally = ({ passed, graded, ungraded }: Tally): PageTally => ({ passed, graded, ungraded });
 	return {
@@ -203,10 +205,7 @@ function runView(label: string, file: string, results: Results): PageRunData {
 		cases: meta.cases,
 		incomplete: meta.incomplete !== undefined,
 		dirty: meta.dirty,
-		metrics: Object.fromEntries([...METRICS, 'overall' as const].map((metric) => [metric, tally(summary.metrics[metric])])) as Record<
-			Metric | 'overall',
-			PageTally
-		>,
+		metrics: Object.fromEntries(shown.map((metric) => [metric, tally(summary.metrics[metric])])),
 		categories: Object.fromEntries(
 			Object.entries(summary.categories).map(([category, { passed, graded }]) => [category, { passed, graded }]),
 		) as PageRunData['categories'],
@@ -241,20 +240,26 @@ export function buildPage(input: {
 	const problems = comparabilityProblems(table, featuredFiles);
 	if (problems.length > 0) throw new Error(`these results cannot share a page:\n${problems.join('\n')}`);
 
-	const { meta } = table[0].results;
+	const { meta, summary } = table[0].results;
+	// The table's runs share a grading stamp, so they report the same metrics.
+	const shown = [...METRICS, 'overall' as const].filter((metric) => summary.metrics[metric] !== undefined);
+	// Described from the cases the runs sent, so a case added to the dataset
+	// since is never presented as measured.
+	const sent = new Set(table.flatMap(({ results }) => results.runs.map((run) => run.caseId)));
+	const measured = cases.filter((testCase) => sent.has(testCase.id));
 	return {
 		generatedAt: input.generatedAt,
 		source: input.source,
 		method: {
-			cases: cases.length,
-			steps: cases.reduce((total, testCase) => total + testCase.steps.length, 0),
-			categories: CATEGORIES.map((id) => ({ id, cases: cases.filter((testCase) => testCase.category === id).length })),
+			cases: measured.length,
+			steps: measured.reduce((total, testCase) => total + testCase.steps.length, 0),
+			categories: CATEGORIES.map((id) => ({ id, cases: measured.filter((testCase) => testCase.category === id).length })),
 			liveReps: meta.reps,
 			judge: { model: meta.judge.model, version: meta.judge.version ?? 1, floor: meta.judge.floor },
 			grading: meta.grading ?? { grader: 0, dataset: '' },
-			metrics: [...METRICS, 'overall' as const].map((id) => ({ id, ...METRIC_INFO[id] })),
+			metrics: shown.map((id) => ({ id, ...METRIC_INFO[id] })),
 		},
-		runs: config.runs.map(({ label, file }) => runView(label, file, load(file))),
+		runs: config.runs.map(({ label, file }) => runView(label, file, load(file), shown)),
 		featured: config.featured.map(({ caseId, before, after }) => {
 			const testCase = cases.find((candidate) => candidate.id === caseId);
 			if (!testCase) throw new Error(`featured case not in the dataset: ${caseId}`);

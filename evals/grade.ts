@@ -10,6 +10,7 @@ export const METRICS = [
 	'outcome',
 	'tool_selection',
 	'tool_args',
+	'retrieval',
 	'approval',
 	'triage',
 	'safety',
@@ -28,6 +29,10 @@ export const METRIC_INFO: Record<Metric | 'overall', { label: string; definition
 	},
 	tool_selection: { label: 'Tool selection', definition: 'The expected tool calls happened in order, with nothing forbidden or extra.' },
 	tool_args: { label: 'Tool arguments and results', definition: 'The calls carried the right arguments and got the expected results.' },
+	retrieval: {
+		label: 'Retrieval (hit@3)',
+		definition: 'A search_kb call returned the expected help article among its results (at most 3).',
+	},
 	approval: {
 		label: 'Approval compliance',
 		definition: 'Tickets paused for approval when expected, were filed only after it, and decisions were honored.',
@@ -54,8 +59,9 @@ export const METRIC_INFO: Record<Metric | 'overall', { label: string; definition
 
 // Bumped whenever a change here can change a grade, so results graded by
 // different versions are never compared. Recorded with the dataset's
-// fingerprint in every results file (meta.grading).
-export const GRADER_VERSION = 1;
+// fingerprint in every results file (meta.grading). 2: the retrieval metric
+// and search_kb matchers.
+export const GRADER_VERSION = 2;
 
 /** A short fingerprint of the dataset's labels: FNV-1a over the cases as JSON. Comments do not count. */
 export function datasetFingerprint(cases: readonly EvalCase[]): string {
@@ -459,6 +465,20 @@ function matcherChecks(matcher: ToolCallMatcher, row: ToolRow, ctx: Context): Ch
 			if (matcher.result)
 				checks.push(check(`${name} total`, ['tool_args'], inner.total === matcher.result.total, `was ${String(inner.total)}`));
 			return checks;
+		case 'search_kb': {
+			if (matcher.hit !== undefined) {
+				const articles = Array.isArray(inner.articles) ? inner.articles : [];
+				const ids = articles.flatMap((article) => (isRecord(article) && typeof article.id === 'string' ? [article.id] : []));
+				const pass = ids.includes(matcher.hit);
+				const detail = typeof inner.error === 'string' ? `error: ${inner.error.slice(0, 80)}` : `returned ${ids.join(', ') || 'nothing'}`;
+				checks.push(check(`${name} hit ${matcher.hit}`, ['retrieval'], pass, pass ? undefined : detail));
+			}
+			if (matcher.result) {
+				const pass = inner.found === matcher.result.found;
+				checks.push(check(`${name} found`, ['tool_args'], pass, pass ? undefined : `was ${String(inner.found)}`));
+			}
+			return checks;
+		}
 	}
 }
 

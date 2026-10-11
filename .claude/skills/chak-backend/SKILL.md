@@ -29,6 +29,7 @@ If a rule can be written in code, it goes in code, not in the system prompt. The
 | --- | --- |
 | Routing, the `Chak` loop, `ItAgent`, tool definitions | `src/index.ts` (wiring only; keep logic out) |
 | A self-contained piece of logic | Its own module of exported **pure functions** and constants: `approval.ts`, `history.ts`, `text-tool-call.ts` |
+| A stateless tool the router runs itself | Its own module (`src/kb.ts` for `search_kb`), mapped in `LOCAL_TOOLS` in `src/index.ts` |
 | A Jev check | `src/jev/<check-name>.ts`, through `runCheck` |
 | Anything returned to the client in `trace` | Types in `src/trace.ts` |
 | The model's instructions | `src/system-prompt.ts` |
@@ -96,8 +97,9 @@ One JSON line per event: `console.log(JSON.stringify({ event: 'area.verb', insta
 
 | Kind | Files | Runs | For |
 | --- | --- | --- | --- |
-| Unit | `test/*.spec.ts` | `npm test` | Pure functions, `ItAgent` through its binding, routing through `SELF.fetch`. No network |
+| Unit | `test/*.spec.ts` | `npm test` | Pure functions, `ItAgent` through its binding, routing through `SELF.fetch`. No network: `vitest.config.mts` turns remote bindings off, so stub `env.AI` and `env.KB` |
 | Eval | `test/*.eval.ts` | `npm run eval` | Live Jev on labeled cases. Needs `TYPESAFE_AI_API_KEY` |
+| Articles | `kb/articles/*.md` | `npm run kb:check` | The help articles against the authoring rules (`kb/articles.ts`). Reads files only; `npm run kb:ingest` writes the index and needs `wrangler login` |
 | End to end | `evals/cases.ts`, `test/scripted-cases.harness.ts` | `npm run eval:agent` | Whole turns through the public route, graded from the responses: live cases three times against `wrangler dev`, scripted failures once in the test pool. Needs `wrangler login` and the key. A behavior change updates the matching cases; `test/eval-cases.spec.ts` keeps them in step with the code |
 | By hand | — | `npm run dev` | A full turn: the AI binding is always remote |
 

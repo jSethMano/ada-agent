@@ -55,6 +55,7 @@ POST /agents/chak/{instance}  { "question": "..." }
         ├─ input_guard (Jev) ── blocked? → fixed refusal, model never runs
         │
         ├─ agent loop (Llama 4 Scout, up to 5 passes; a dropped connection is retried once)
+        │     ├─ search_kb → run in the router: bge-m3 embedding → Vectorize (indexed, not yet measured)
         │     ├─ lookup_ticket / list_my_tickets → ItAgent (a lookup with no ticket number is refused by the router)
         │     └─ create_ticket
         │           ├─ arguments over the limits? → model is told, no triage, no card
@@ -67,6 +68,7 @@ POST /agents/chak/{instance}  { "question": "..." }
 
 - **`Chak`** (`src/index.ts`) is the public router Durable Object. Each `{instance}` is one conversation. Its history and any waiting ticket live in that Durable Object's state.
 - **`ItAgent`** is the ticket store, one Durable Object shared by every conversation. It is reachable only through Chak's binding: the Worker 404s every path outside `/agents/chak/`.
+- **`search_kb`** runs in the router itself (`LOCAL_TOOLS`, logic in `src/kb.ts`): it keeps no state, so a Durable Object would add a hop and a migration for nothing. It searches the help articles in `kb/articles`, which `npm run kb:ingest` embeds into a Vectorize index. **Indexed, not yet measured:** the `chak-kb` index was created and filled with the 15 articles on 2026-10-11, and `wrangler.jsonc` binds it as `KB`, but no eval has run against it yet. `npm test` turns remote bindings off, so it never reaches the index. Design: [docs/rag-design.md](docs/rag-design.md).
 - Requests to the old `/agents/ada/` path are rewritten to `/agents/chak/`. This shim will be removed once every client has moved over.
 
 All checks live in `src/jev/` and go through `runCheck`, which never throws. With a missing key, a timeout (2 s, no retries), or a TypeSafe outage, a check records `skipped` or `error` and the turn carries on as if it had passed. Jev is pinned to `jev-1.13.0`.
@@ -75,7 +77,7 @@ All checks live in `src/jev/` and go through `runCheck`, which never throws. Wit
 | --- | --- | --- | --- |
 | `input_guard` | before the model | injection > 0.9, or injection > 0.5 and off-topic → **blocked** | pasted credentials (and adds the change-it notice) |
 | `triage_ticket` | before each `create_ticket` | no specific problem, the visitor never described it, or its text contains a pasted secret → **held** | category, urgency, security incident, duplicate/related ticket, priority (P1–P4) |
-| `verify_answer` | after the final answer | `prompt_leak` > 0.6 → **replaced** | unconfirmed actions, facts that contradict or go beyond tool results |
+| `verify_answer` | after the final answer | `prompt_leak` > 0.6 → **replaced** | unconfirmed actions, facts that contradict or go beyond tool results, instructions no help article gave |
 
 The thresholds are mirrored in `ada-agent-fe/src/lib/site.ts`. Change both together. Why each line sits where it does is in [docs/decisions.md](docs/decisions.md). How to read a trace and the logs is in [docs/observability.md](docs/observability.md).
 
@@ -83,11 +85,13 @@ The thresholds are mirrored in `ada-agent-fe/src/lib/site.ts`. Change both toget
 
 Each turn, the model does one of these, as the system prompt (`src/system-prompt.ts`) and the tool descriptions direct:
 
-- **Answer directly:** IT questions that need no data, including how-to questions.
+- **Search the help articles** with `search_kb` for a how-to or troubleshooting question, or a problem described without asking for a ticket. It gives the steps of the article that fits and names it. When no article fits, it gives brief advice and says it is general.
+- **Answer directly:** what something is ("what is a VPN?").
 - **Look up:** a ticket by number with `lookup_ticket`, or this conversation's tickets with `list_my_tickets`.
 - **Propose a ticket** with `create_ticket`:
-  - for a problem IT has to fix;
-  - for something only IT staff can do (email IT, reset a password, grant access);
+  - when the visitor asks for one about a problem;
+  - for something only IT staff can do (email IT, reset a password, grant access, install software, a lost or stolen device);
+  - when the article's "When to file a ticket" applies, or the visitor already tried its steps;
   - for a follow-up to an existing ticket.
 - **Ask one question** when it cannot act: no problem was described, or a ticket number is missing.
 - **Decline in one sentence:**
@@ -101,11 +105,12 @@ It reports only what a tool result confirms. The code checks the rest: guard, ar
 
 | Tool | What it does |
 | --- | --- |
+| `search_kb` | Searches the 15 demo help articles in `kb/articles` and returns up to 3, best first, with their steps and when to file a ticket. Runs in the router. **Indexed 2026-10-11, not yet measured.** |
 | `lookup_ticket` | Looks up a ticket by id. Tickets `42` and `77` are seeded fixtures. An id with no digit in it is refused by the router before it reaches ItAgent. |
 | `list_my_tickets` | Lists the tickets filed in this conversation, newest first. It never lists another conversation's tickets. |
 | `create_ticket` | Proposes a new ticket. The visitor approves, edits, or cancels it before it is filed. |
 
-Ticket ids are sequential, starting at 78. A sub-agent that fails returns an error result to the model, and the turn still answers.
+Ticket ids are sequential, starting at 78. A sub-agent or a search that fails returns an error result to the model, and the turn still answers.
 
 ## Human in the loop
 
@@ -234,11 +239,11 @@ Iteration 1 measured only 1 of 3 reps before the daily quota ran out, so it isn'
 - `unsupported-update-priority-42` fell to 2/3: one text-written create call, held by triage.
 - `ambiguous-is-my-ticket-done` stayed 0/3. All three placeholder lookups were refused by the router's guard; the prompt rule didn't stop the attempt.
 
-Chak's behavior is frozen at iteration 3. The full log is [evals/ITERATIONS.md](evals/ITERATIONS.md), and the page's eval section shows featured cases before and after.
+These results are iteration 3's. The help-article search added since changes behavior, and is indexed but not yet measured. The full log is [evals/ITERATIONS.md](evals/ITERATIONS.md), and the page's eval section shows featured cases before and after.
 
 ## Limitations
 
-- **Small, synthetic dataset.** 50 synthetic cases, of which 2 are not in English.
+- **Small, synthetic dataset.** 50 synthetic cases measured, of which 2 are not in English. Six help-article cases have been added since and not yet run.
   - Treating each case as one observation, a pass rate near 95% carries a 95% interval of about ±6 points (1.96·√(0.95·0.05/50)).
   - Repeating a case 3 times adds runs, not independent cases, so a difference of a few runs between iterations is within noise.
 - **A model judges outcomes.** Jev decides answered, asked, or declined. It can be unsure: greetings fell below its floor in version 2 and went ungraded.
@@ -252,6 +257,11 @@ Chak's behavior is frozen at iteration 3. The full log is [evals/ITERATIONS.md](
 - **No real ticketing system.** Tickets 42 and 77 are fixtures, and the store is one Durable Object.
 - **Edited ticket text is not screened.** The guard never sees it. The model has resisted it in every run so far, but nothing in code checks it.
 - **Checks fail open.** During a TypeSafe outage there is no guard, no hold, and no leak replacement.
+- **The help-article search is indexed, not yet measured.**
+  - **No eval yet.** The `chak-kb` index holds the 15 articles (2026-10-11), but no eval run has measured retrieval or the answers.
+  - **No floor yet.** `MIN_SCORE` is 0, so the 3 closest articles always come back and the model judges whether one fits. The floor waits for measured scores (user decision).
+  - **Grounding is record only.** `ungrounded_instructions` in `verify_answer` flags steps no article gave, but changes nothing.
+  - **A demo corpus.** 15 short articles, written for this demo, with English bodies and Tagalog only in keywords. Retrieval at this size says little about a real knowledge base.
 
 ## Future improvements
 
@@ -263,7 +273,7 @@ Chak's behavior is frozen at iteration 3. The full log is [evals/ITERATIONS.md](
 - **Safety:**
   - screening edited ticket text;
   - asking the model again when an answer leaks, instead of only replacing it.
-- **Answers:** a knowledge base (RAG) for how-to answers.
+- **Answers:** index and measure the help-article search, then set its score floor from the results.
 - **Responses:** streaming.
 - **Tracing:** a pass index on each trace row, and a turn id that links log lines to a trace.
 
@@ -333,6 +343,8 @@ npm test           # unit tests (no network)
 npm run eval       # live Jev eval cases (needs TYPESAFE_AI_API_KEY)
 npm run eval:agent # end-to-end agent eval (needs wrangler login and TYPESAFE_AI_API_KEY)
 npm run eval:export -- --to <path>  # the front end's eval data, from saved results (evals/page.config.ts)
+npm run kb:check   # check the help articles in kb/articles (files only)
+npm run kb:ingest  # embed them into the chak-kb index (needs wrangler login; --dry-run sends nothing)
 npm run cf-typegen # regenerate worker-configuration.d.ts after changing bindings
 npm run deploy
 ```
@@ -370,14 +382,16 @@ Workers AI runs remotely even under `wrangler dev`, so a full turn needs a Cloud
 .claude/agents/      chak-worker-agent, the implementer sub-agent for this repo
 .claude/skills/      Claude Skills: chak-backend, chak-add-tool, chak-add-jev-check, chak-eval,
                      helpdesk-agent, ticket-triage, helpdesk-security
-docs/                decisions, observability, and the Jev design docs
+docs/                decisions, observability, the RAG design, and the Jev design docs
 evals/               the eval: cases, runner, grader, judge, page export, ITERATIONS.md
   results/           saved runs (JSON + Markdown report)
+kb/                  the help articles, kb:check, and kb:ingest
 src/
   index.ts           Worker entry, Chak router, ItAgent ticket store
   system-prompt.ts   Chak's instructions
   approval.ts        human-in-the-loop pause/resume, ticket argument checks
   failures.ts        tool-failure results, the dropped-connection retry rule
+  kb.ts              search_kb: the help-article search and its result
   tool-guards.ts     router checks on tool arguments (placeholder ticket ids)
   secret-notice.ts   the fixed notice for a pasted secret
   history.ts         conversation history, envelopes, trimming

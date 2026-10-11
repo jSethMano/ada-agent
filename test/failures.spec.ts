@@ -30,5 +30,8 @@ describe('unreachableResult', () => {
 		expect(unreachableResult('lookup_ticket').result).toMatchObject({ found: false });
 		expect(unreachableResult('list_my_tickets').result).not.toHaveProperty('found');
 		expect(unreachableResult('list_my_tickets').result.error).toContain('could not be reached');
+		// Shaped like a search that found nothing, so the model takes the no-article path.
+		expect(unreachableResult('search_kb').result).toMatchObject({ found: false, articles: [] });
+		expect(unreachableResult('search_kb').result.error).toContain('general advice');
 	});
 });

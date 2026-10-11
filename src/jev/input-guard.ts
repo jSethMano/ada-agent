@@ -7,7 +7,12 @@ import { runCheck, type CheckSpec } from './run-check';
 const ASSISTANT = {
 	name: 'Chak',
 	role: 'Internal IT helpdesk assistant for the employees of one company. Handles IT support only.',
-	capabilities: ['Look up an existing IT ticket by its id', 'List the IT tickets filed in this conversation', 'Create a new IT ticket'],
+	capabilities: [
+		'Search the company IT help articles',
+		'Look up an existing IT ticket by its id',
+		'List the IT tickets filed in this conversation',
+		'Create a new IT ticket',
+	],
 };
 
 const QUESTIONS = {

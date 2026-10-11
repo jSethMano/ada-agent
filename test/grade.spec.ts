@@ -7,6 +7,7 @@ import { containsPhrase, createOutcome, gradeCase, responseProblems, summarize, 
 import type { EvalCase, StepExpectation } from '../evals/types';
 import { CANCELLED_RESULT, INVALID_TICKET_RESULT } from '../src/approval';
 import { unreachableResult } from '../src/failures';
+import { shapeResult } from '../src/kb';
 import { HELD_RESULT } from '../src/jev/triage-ticket';
 import type { ApprovalEntry, CheckEntry, ToolCallEntry, TraceEntry } from '../src/trace';
 
@@ -242,6 +243,42 @@ describe('tool calls', () => {
 			runOf([answered('x', [guard(), lookup, verify()], confident('answered'))]),
 		);
 		expect(failing(grade)).toEqual(['expected calls', 'no forbidden tools']);
+	});
+});
+
+describe('retrieval', () => {
+	const article = (id: string, score: number) => ({
+		id,
+		score,
+		metadata: { title: id, category: 'network', summary: 's', steps: 's', if_not: 's', file_ticket_when: 's' },
+	});
+	const search = (result: unknown) => tool('search_kb', { query: 'vpn will not connect' }, result);
+	const expectHit: StepExpectation = { outcome: 'answered', tools: { calls: [{ tool: 'search_kb', hit: 'vpn-connection-failure' }] } };
+	const grade = (row: ToolCallEntry) =>
+		gradeCase(oneStep(expectHit), runOf([answered('Try this.', [guard(), row, verify()], confident('answered'))]));
+	const retrieval = (graded: CaseGrade) => graded.steps[0].checks.filter((c) => c.metrics.includes('retrieval'));
+
+	it('passes when the expected article is among the results, in any position', () => {
+		const hit = grade(search(shapeResult([article('wifi-connection-issues', 0.6), article('vpn-connection-failure', 0.55)])));
+		expect(retrieval(hit)).toEqual([{ name: 'search_kb hit vpn-connection-failure', metrics: ['retrieval'], pass: true }]);
+		expect(hit.status).toBe('pass');
+	});
+
+	it('fails a miss, an empty result, and a failed search, saying what came back', () => {
+		const miss = grade(search(shapeResult([article('wifi-connection-issues', 0.6)])));
+		expect(retrieval(miss)[0]).toMatchObject({ pass: false, detail: 'returned wifi-connection-issues' });
+		expect(retrieval(grade(search(shapeResult([]))))[0]).toMatchObject({ pass: false, detail: 'returned nothing' });
+		const failed = retrieval(grade(search(unreachableResult('search_kb'))))[0];
+		expect(failed).toMatchObject({ pass: false });
+		expect(failed.detail).toMatch(/^error: The help articles could not be searched/);
+	});
+
+	it('counts in its own metric, apart from whether the search was made', () => {
+		const skipped = gradeCase(oneStep(expectHit), runOf([answered('Try this.', [guard(), verify()], confident('answered'))]));
+		expect(failing(skipped)).toEqual(['expected calls']);
+		expect(retrieval(skipped)).toEqual([]);
+		const { metrics } = summarize([oneStep(expectHit)], [], [grade(search(shapeResult([article('vpn-connection-failure', 0.7)])))]);
+		expect(metrics.retrieval).toEqual({ passed: 1, graded: 1, ungraded: 0 });
 	});
 });
 

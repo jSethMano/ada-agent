@@ -14,6 +14,7 @@ How a turn actually runs in this repo, so behavior described in the skill can be
 | Blocked → fixed refusal, `iterations: 0`, not written to history | `BLOCKED_ANSWER` | code |
 | Model pass (up to 5): system prompt + history + this turn | `Chak.continueTurn`, `MAX_ITERATIONS` | model |
 | Tool call written as text → parsed and run as a real call, marked `fromText` | `textToolCall` in `src/text-tool-call.ts` | code |
+| `search_kb` → run in the router: embed the query with bge-m3, query the Vectorize index, shape the result | `dispatchTool`, `LOCAL_TOOLS`, `searchKb` in `src/kb.ts` | code |
 | `lookup_ticket` / `list_my_tickets` → dispatched to `ItAgent`, `filedBy` added by the router | `Chak.runToolCalls`, `dispatchTool` | code |
 | `create_ticket` → triage, then hold *or* pause for approval | `Chak.triageTicket`, `runTriageTicket` | Jev judges, code applies `HOLD`, `derivePriority`, `linkTo` |
 | Pause: save `PendingApproval`, return `{ approval }` | `pause` in `continueTurn` | code |
@@ -27,6 +28,19 @@ How a turn actually runs in this repo, so behavior described in the skill can be
 ## Tool contracts
 
 Arguments are what the model writes. Everything else in the request to `ItAgent` comes from the router.
+
+**`search_kb { query: string }`**: 1–300 characters. Run by the router itself, not `ItAgent`; it gets only `query`. At most 3 articles, best first, each section capped at 2,000 characters and the result at 9,000 (`KB_RESULT_LIMITS`).
+
+```jsonc
+{ "result": { "found": true, "articles": [{ "id": "vpn-connection-failure", "title": "Troubleshooting VPN Connection Failures", "score": 0.71,
+              "summary": "…", "steps": "1. …", "if_not": "- …", "file_ticket_when": "File a ticket if …" }] } }
+// Nothing at or above MIN_SCORE (no floor yet)
+{ "result": { "found": false, "articles": [], "note": "No help article matched. Give brief general advice and say plainly …" } }
+// An empty or over-long query: not searched
+{ "result": { "found": false, "articles": [], "error": "Not searched: query must be 1-300 characters." } }
+// No index bound, or the embedding or index call failed
+{ "result": { "found": false, "articles": [], "error": "The help articles could not be searched. …" } }
+```
 
 **`lookup_ticket { ticket_id: string }`**: `ticket_id` is at most 32 characters. A number is accepted and converted to a string.
 

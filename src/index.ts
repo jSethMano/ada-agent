@@ -17,6 +17,7 @@ import { envelope, toolCallsIn, toolResultEntry, trimHistory, userMessagesIn, ty
 import { blockRule, runInputGuard } from './jev/input-guard';
 import { HELD_RESULT, runTriageTicket, type Priority, type TicketTriage, type TriageCandidate } from './jev/triage-ticket';
 import { runVerifyAnswer } from './jev/verify-answer';
+import { searchKb } from './kb';
 import { SECRET_NOTICE, sharedSecret } from './secret-notice';
 import { SYSTEM_PROMPT } from './system-prompt';
 import { textToolCall } from './text-tool-call';
@@ -41,6 +42,27 @@ const TOOLS = [
 	{
 		type: 'function',
 		function: {
+			name: 'search_kb',
+			description:
+				'Search the company IT help articles. Use for a how-to or troubleshooting question, and for an IT problem the user ' +
+				'describes without asking for a ticket. Not for looking up or listing tickets, questions outside IT, or greetings. ' +
+				'The result lists the closest articles, best first, each with its overview, symptoms, steps, and file_ticket_when ' +
+				'(when to file a ticket). Use an article only if it fits the problem: give its steps and name its title. Call ' +
+				"create_ticket only if the article's file_ticket_when fits what the user said, or the user says they already tried " +
+				'the steps. If no article fits, give brief general advice and say plainly that it is general advice, not from the ' +
+				'help articles.',
+			parameters: {
+				type: 'object',
+				properties: {
+					query: { type: 'string', description: 'The problem or question, in a short phrase of your own.' },
+				},
+				required: ['query'],
+			},
+		},
+	},
+	{
+		type: 'function',
+		function: {
 			name: 'lookup_ticket',
 			description:
 				'Look up an existing IT support ticket by its ID. Returns ticket status, title, and assignee. ' +
@@ -59,9 +81,11 @@ const TOOLS = [
 		function: {
 			name: 'create_ticket',
 			description:
-				'Create a new IT support ticket. Use when the user describes a problem they need IT to fix, or asks for something ' +
-				'only IT staff can do (reset a password, grant access, contact IT), and does not already have a ticket number. Not ' +
-				"for how-to questions: answer those. The result includes the ticket's priority (P1 highest, " +
+				'Create a new IT support ticket. Use when the user asks for a ticket about a problem they describe, asks for ' +
+				'something only IT staff can do (reset a password, grant access, install software, contact IT, deal with a lost or ' +
+				"stolen device or a security incident), or has a problem a search_kb article's file_ticket_when covers or its steps " +
+				'did not fix; and does not already have a ticket number. Not for how-to questions, or a problem described without ' +
+				"asking for a ticket: search_kb first. The result includes the ticket's priority (P1 highest, " +
 				'P4 lowest) and triage: its category, and a duplicate_of or related_to ticket id when an existing ' +
 				'ticket covers the same problem. Tell the user the priority, and mention a duplicate or related ticket ' +
 				'if there is one. A null priority means triage did not run; say nothing about priority then. Only call ' +
@@ -160,17 +184,28 @@ async function postToSubAgent(env: Env, namespace: (typeof TOOL_ROUTING)[ToolNam
 	return await res.json();
 }
 
+// Tools the router runs itself, because they keep no state. They get the
+// model's arguments only, never `extra`: nothing they do depends on who asks.
+const LOCAL_TOOLS = {
+	search_kb: searchKb,
+} as const;
+
+type LocalToolName = keyof typeof LOCAL_TOOLS;
+
 // `extra` rides alongside the model's arguments, never inside them. A
-// sub-agent that throws, or answers with something that is not JSON, gives the
-// model an error result instead of failing the turn: the call stays in the
-// trace, and Chak can tell the visitor.
+// sub-agent or local tool that throws, or a sub-agent that answers with
+// something that is not JSON, gives the model an error result instead of
+// failing the turn: the call stays in the trace, and Chak can tell the visitor.
 async function dispatchTool(env: Env, call: ToolCall, extra: Record<string, unknown>, instance: string): Promise<unknown> {
-	const namespace = TOOL_ROUTING[call.name as ToolName];
-	if (!namespace) {
+	// Own keys only, so a call to "constructor" is an unknown tool, not Object's.
+	const local = Object.hasOwn(LOCAL_TOOLS, call.name) ? LOCAL_TOOLS[call.name as LocalToolName] : null;
+	const namespace = Object.hasOwn(TOOL_ROUTING, call.name) ? TOOL_ROUTING[call.name as ToolName] : null;
+	if (!local && !namespace) {
 		return { error: `Unknown tool: ${call.name}` };
 	}
 	try {
-		return await postToSubAgent(env, namespace, { tool: call.name, args: call.arguments, ...extra });
+		if (local) return await local(env, call.arguments);
+		return await postToSubAgent(env, namespace!, { tool: call.name, args: call.arguments, ...extra });
 	} catch (error) {
 		console.error(JSON.stringify({ event: 'tool.failed', instance, tool: call.name, detail: String(error).slice(0, 300) }));
 		return unreachableResult(call.name);

@@ -21,7 +21,7 @@ Read [chak-backend](../chak-backend/SKILL.md) first for the general conventions.
 | **What identity or authority does it need?** | Anything that says *who* or *how important* comes from the router, never from the model's arguments |
 | **What can the model get wrong in the arguments?** | Every argument is validated in `ItAgent` (type, length, format). The model sends numbers for strings (`ticket_id: 42`), so coerce where harmless |
 | **What does the model need to read back?** | Results are what the model reports from and what `verify_answer` checks against. Return the facts the user will ask about, and an explicit `error` when it didn't work |
-| **Can it be one more case on `ItAgent`, or does it need a new sub-agent?** | Prefer a case on `ItAgent`. A new Durable Object class needs a binding, a migration, and `npm run cf-typegen`, and it must stay unreachable from outside |
+| **Can it be one more case on `ItAgent`, a tool the router runs itself, or does it need a new sub-agent?** | Prefer a case on `ItAgent` for anything about tickets. A tool with no state and nothing visitor-specific (`search_kb`) can run in the router (`LOCAL_TOOLS`) with no hop. A new Durable Object class needs a binding, a migration, and `npm run cf-typegen`, and it must stay unreachable from outside |
 
 ## 2. Touchpoints
 
@@ -32,6 +32,8 @@ Every row is a place that must change. `test/skills.spec.ts` checks that each fi
 | `src/index.ts` | `TOOLS` | Add the definition. The description is instructions for the model: when to use it, when **not** to, what the result means, and what to tell the user |
 | `src/index.ts` | `ToolRequest` | Add a union member. Router-supplied fields sit beside `args`, not in it |
 | `src/index.ts` | `TOOL_ROUTING` | Map the tool to its sub-agent |
+| `src/index.ts` | `LOCAL_TOOLS` | Instead of the three rows around this one, for a tool the router runs itself: map the name to a function in its own module (`searchKb` in `src/kb.ts`). It gets the model's arguments only, never `extra` |
+| `src/failures.ts` | `unreachableResult` | What the model reads when the tool's backend throws. Give it the tool's own shape (`found: false`, `created: false`) |
 | `src/index.ts` | `onRequest` | Add the `case` in `ItAgent.onRequest`: validate, act, return `{ result }`. The `never` default fails the build until you do |
 | `src/index.ts` | `runToolCalls` | Only if it is consequential (step 4), or needs extra router fields |
 | `src/system-prompt.ts` | `SYSTEM_PROMPT` | Update "You have exactly N tools: …" **and** the sentence describing what the tools do |
@@ -39,12 +41,14 @@ Every row is a place that must change. `test/skills.spec.ts` checks that each fi
 | `src/jev/verify-answer.ts` | `QUESTIONS` | If the tool performs a new kind of action, add its verb to `unconfirmed_action`. Update the capability list in `prompt_leak`'s `false` text |
 | `src/text-tool-call.ts` | `textToolCall` | Nothing: it reads `TOOL_NAMES`. Check that the name parses if it is unusual |
 | `test/it-agent.spec.ts` | `itAgent` | Handler tests, including the security properties (step 5) |
+| `evals/types.ts` | `ToolName` | Add it, and a matcher in `ToolCallMatcher` if a case needs to check its arguments or results |
+| `evals/cases.ts` | `CASES` | At least one case that calls it: `test/eval-cases.spec.ts` fails until one does |
 
 Outside `src/`:
 
 - **Skills:** add the tool to `helpdesk-agent` (the classify table and the result table) and to the capabilities in `helpdesk-security`. `test/skills.spec.ts` fails until `helpdesk-agent` names every tool the system prompt lists.
 - **Front end:** tool rows in the trace are generic. A consequential tool needs an approval card in `ada-agent-fe`.
-- **Evals:** add cases to `test/input-guard.eval.ts` (a message asking for the new capability must not look like injection) and `test/verify-answer.eval.ts` (a faithful report of its result, and a claim with no call behind it).
+- **Evals:** add cases to `test/input-guard.eval.ts` (a message asking for the new capability must not look like injection) and `test/verify-answer.eval.ts` (a faithful report of its result, and a claim with no call behind it). Then add end-to-end cases (see [chak-eval](../chak-eval/SKILL.md)).
 
 ## 3. The handler
 
