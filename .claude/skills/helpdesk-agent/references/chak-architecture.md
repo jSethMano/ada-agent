@@ -15,7 +15,7 @@ How a turn actually runs in this repo, so behavior described in the skill can be
 | Model pass (up to 5): system prompt + history + this turn | `Chak.continueTurn`, `MAX_ITERATIONS` | model |
 | Tool call written as text → parsed and run as a real call, marked `fromText` | `textToolCall` in `src/text-tool-call.ts` | code |
 | `search_kb` → run in the router: embed the query with bge-m3, query the Vectorize index, shape the result | `dispatchTool`, `LOCAL_TOOLS`, `searchKb` in `src/kb.ts` | code |
-| `lookup_ticket` / `list_my_tickets` → dispatched to `ItAgent`, `filedBy` added by the router | `Chak.runToolCalls`, `dispatchTool` | code |
+| `lookup_ticket` / `list_my_tickets` → dispatched to `ItAgent`, `filedBy` added by the router, and ItAgent scopes both to it | `Chak.runToolCalls`, `dispatchTool` | code |
 | `create_ticket` → triage, then hold *or* pause for approval | `Chak.triageTicket`, `runTriageTicket` | Jev judges, code applies `HOLD`, `derivePriority`, `linkTo` |
 | Pause: save `PendingApproval`, return `{ approval }` | `pause` in `continueTurn` | code |
 | Decision arrives: approve / edit / cancel | `Chak.decide`, `parseDecision` | human |
@@ -42,10 +42,11 @@ Arguments are what the model writes. Everything else in the request to `ItAgent`
 { "result": { "found": false, "articles": [], "error": "The help articles could not be searched. …" } }
 ```
 
-**`lookup_ticket { ticket_id: string }`**: `ticket_id` is at most 32 characters. A number is accepted and converted to a string.
+**`lookup_ticket { ticket_id: string }`**: `ticket_id` is at most 32 characters. A number is accepted and converted to a string. Only the fixtures and the tickets this conversation filed are found. Any other id, another conversation's ticket included, gets the not-found result, so it can't be told from an id never issued.
 
 ```jsonc
 { "result": { "found": true, "id": "42", "title": "VPN keeps disconnecting", "status": "in_progress", "assignee": "sam@company.com" } }
+// Never issued, or filed by another conversation: the same result
 { "result": { "found": false, "ticket_id": "99" } }
 { "result": { "found": false, "error": "invalid ticket_id" } }
 ```

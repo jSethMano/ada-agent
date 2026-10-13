@@ -7,6 +7,7 @@
 // drops the waiting ticket.
 
 import { toolResultEntry, trimHistory, type HistoryEntry, type OpenAIToolCall } from './history';
+import type { ModelUsage } from './model-usage';
 import { SECRET_NOTICE, sharedSecret } from './secret-notice';
 import type { Priority, TicketTriage } from './jev/triage-ticket';
 import type { CheckEntry, TraceEntry } from './trace';
@@ -27,6 +28,10 @@ export type TurnProgress = {
 	steps: TraceEntry[];
 	// Model calls made so far. MAX_ITERATIONS bounds the turn on both sides of a pause.
 	passes: number;
+	// Token usage of those calls, summed on both sides of a pause, which is why
+	// it rides in the turn. Absent until a pass reports usage, and on turns
+	// paused before it was kept.
+	usage?: ModelUsage;
 };
 
 export type PendingApproval = {

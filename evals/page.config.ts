@@ -77,14 +77,16 @@ export const PAGE_CONFIG: PageConfig = {
 		},
 	],
 	// Once iteration 4 has run, add the "since RAG" table (evals/ITERATIONS.md,
-	// "Two tables", has the regrade commands that make the two files):
+	// "Two tables", has the regrade commands that make the two files). The
+	// iteration 3 copy is the one graded under the labels iteration 4 runs with
+	// (grader 4, dataset 95872c63); every earlier copy fails the stamp check.
 	//
 	// comparisons: [
 	// 	{
 	// 		id: 'since-rag',
 	// 		title: 'Since the help articles: the 50 shared cases, under the current answer key',
 	// 		runs: [
-	// 			{ label: 'iteration 3', file: 'results/20261010T130510Z-2cd2468-rag-labels.json' },
+	// 			{ label: 'iteration 3', file: 'results/20261010T130510Z-2cd2468-iter4-labels-2.json' },
 	// 			{ label: 'iteration 4', file: 'results/<iteration 4>-shared.json' },
 	// 		],
 	// 		newCases: {

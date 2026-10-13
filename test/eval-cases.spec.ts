@@ -259,6 +259,17 @@ describe('eval dataset', () => {
 		}
 	});
 
+	it('sends from a second conversation only in a live case, and never a step that pauses', () => {
+		// The scripted harness fakes one instance's bindings, and decisions go to
+		// the first conversation, so a card shown in the second could never be decided.
+		const others = STEPS.filter(({ step }) => 'say' in step && step.conversation === 'other');
+		expect(others.length).toBeGreaterThan(0);
+		for (const { testCase, step } of others) {
+			expect(testCase.harness, testCase.id).toBe('live');
+			for (const expectation of expectationsOf(step)) expect(outcomesOf(expectation), testCase.id).not.toContain('awaiting_approval');
+		}
+	});
+
 	it('expects a 409 only from a decision, and a 5xx only from a scripted failure', () => {
 		for (const { testCase, step } of STEPS) {
 			if (step.expect.outcome !== 'error') continue;

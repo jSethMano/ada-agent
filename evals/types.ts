@@ -214,7 +214,13 @@ export type StepExpectation = OutcomeExpectation & {
 // gap, not a regression.
 export type KnownGap = { today: StepExpectation; note: string };
 
-export type SayStep = { say: string; intent: Intent; expect: StepExpectation; knownGap?: KnownGap };
+// `conversation: 'other'` sends the message from a second conversation of the
+// case's own, a fresh instance, as another visitor would: for what one
+// conversation must never see of another's. Captures carry over, so it can
+// name a ticket the first conversation filed. Live cases only, since the
+// scripted harness fakes the bindings of one instance, and never a step that
+// pauses, since decisions go to the first conversation.
+export type SayStep = { say: string; intent: Intent; expect: StepExpectation; knownGap?: KnownGap; conversation?: 'other' };
 
 // `id` is the approval id the decision carries. `latest` (the default): the id
 // from the most recent approval response in this case, even one already

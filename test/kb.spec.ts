@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import { describe, expect, it } from 'vitest';
 import {
 	aiAddressedLines,
@@ -25,6 +26,7 @@ import {
 	shapeResult,
 	type KbIndex,
 } from '../src/kb';
+import workerSource from '../src/index.ts?raw';
 
 // The help-article search (src/kb.ts) and the article rules kb:check applies
 // (kb/articles.ts). No network: the index and the embedding model are stubs.
@@ -258,5 +260,19 @@ describe('searchKb', () => {
 		const small = stubs(384);
 		await expect(searchKb({ AI: small.AI, KB: small.KB }, { query: 'vpn' })).rejects.toThrow('384 dimensions');
 		expect(small.calls.queries).toEqual([]);
+	});
+});
+
+describe('the search_kb tool description', () => {
+	// The model reads the description to know which fields to use. Until
+	// 2026-10-12 it named "overview, symptoms", which no article ever had.
+	// src/index.ts cannot be imported here (eval-cases.spec.ts says why), so
+	// the description is read from its source.
+	const description = /name: 'search_kb',\s*description:\s*([\s\S]*?),\s*parameters:/.exec(workerSource)?.[1] ?? '';
+
+	it('names every field a result article carries, and not the old section names', () => {
+		expect(description).not.toBe('');
+		for (const { field } of KB_SECTIONS) expect(description, field).toContain(field);
+		for (const stale of ['overview', 'symptoms']) expect(description).not.toContain(stale);
 	});
 });

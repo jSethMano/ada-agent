@@ -11,7 +11,7 @@ import { EMBEDDING_MODEL, KB_DIMENSIONS, KB_SECTIONS, type KbIndex } from '../sr
 // cases in test/scripted-cases.harness.ts use the same technique for the
 // end-to-end eval.
 
-type Reply = { choices: Array<{ message: { content: string; tool_calls?: unknown[] } }> } | Error;
+type Reply = { choices: Array<{ message: { content: string; tool_calls?: unknown[] } }>; usage?: Record<string, number> } | Error;
 
 const toolCall = (name: string, args: unknown): Reply => ({
 	choices: [
@@ -21,6 +21,11 @@ const toolCall = (name: string, args: unknown): Reply => ({
 	],
 });
 const text = (content: string): Reply => ({ choices: [{ message: { content } }] });
+// The usage Workers AI reports with a reply (worker-configuration.d.ts).
+const used = (reply: Reply, prompt_tokens: number, completion_tokens: number): Reply => ({
+	...(reply as Exclude<Reply, Error>),
+	usage: { prompt_tokens, completion_tokens, total_tokens: prompt_tokens + completion_tokens },
+});
 
 let instances = 0;
 
@@ -236,6 +241,113 @@ describe('search_kb', () => {
 		// Logged as a misconfiguration, without the query.
 		expect(logged.join('\n')).toContain('"event":"tool.failed"');
 		expect(logged.join('\n')).not.toContain('vpn will not connect');
+	});
+});
+
+describe('a lookup from another conversation', () => {
+	// Files a ticket in one conversation and returns its id. The scripts are
+	// read as the model is called, so a test can add replies once it has the id.
+	async function filed() {
+		const replies: Reply[] = [toolCall('create_ticket', { title: 'Headset mic broken', description: 'The microphone is silent.' }), text('Filed.')];
+		const owner = await chak(replies);
+		const paused = await owner.send({ question: 'My headset microphone stopped working, please file a ticket' });
+		const decided = await owner.send({ decision: { id: paused.body.approval.id, action: 'approve' } });
+		const id = String(rows(decided.body, 'tool').at(-1)?.result.result.id);
+		return { owner, replies, id };
+	}
+
+	it('finds nothing, while the conversation that filed the ticket finds it', async () => {
+		const { owner, replies, id } = await filed();
+		replies.push(toolCall('lookup_ticket', { ticket_id: id }), text('It is open.'));
+		const own = await owner.send({ question: `What's the status of ticket ${id}?` });
+		expect(rows(own.body, 'tool')[0].result.result).toMatchObject({ found: true, id, title: 'Headset mic broken' });
+
+		const other = await chak([toolCall('lookup_ticket', { ticket_id: id }), text('I could not find that ticket.')]);
+		const { status, body } = await other.send({ question: `What's the status of ticket ${id}?` });
+		expect(status).toBe(200);
+		expect(rows(body, 'tool')[0].result).toEqual({ result: { found: false, ticket_id: id } });
+	});
+
+	it('finds nothing when the call was written as text, either', async () => {
+		const { id } = await filed();
+		const other = await chak([text(`[lookup_ticket(ticket_id="${id}")]`), text('I could not find that ticket.')]);
+		const { body } = await other.send({ question: `What's the status of ticket ${id}?` });
+		expect(rows(body, 'tool')[0]).toMatchObject({ tool: 'lookup_ticket', fromText: true, result: { result: { found: false, ticket_id: id } } });
+	});
+});
+
+describe('model usage', () => {
+	// The Worker logs to this isolate's console.
+	async function logged<T>(run: () => Promise<T>): Promise<{ result: T; lines: string[] }> {
+		const lines: string[] = [];
+		const consoleLog = console.log;
+		console.log = (...args: unknown[]) => lines.push(args.map(String).join(' '));
+		try {
+			return { result: await run(), lines };
+		} finally {
+			console.log = consoleLog;
+		}
+	}
+
+	it('sums every pass into the body, logs each one, and changes nothing else', async () => {
+		const turn = await chak([used(toolCall('lookup_ticket', { ticket_id: '42' }), 1000, 20), used(text('Ticket 42 is in progress.'), 1100, 30)]);
+		const { result, lines } = await logged(() => turn.send({ question: 'Look up ticket 42' }));
+		expect(result.status).toBe(200);
+		expect(result.body).toMatchObject({ answer: 'Ticket 42 is in progress.', iterations: 2 });
+		expect(result.body.usage).toEqual({ passes: 2, inputTokens: 2100, outputTokens: 50 });
+		expect(Object.keys(result.body)).toEqual(['answer', 'iterations', 'usage', 'trace']);
+		const events = lines.flatMap((line) => {
+			try {
+				return [JSON.parse(line) as Record<string, unknown>];
+			} catch {
+				return [];
+			}
+		});
+		const passes = events.filter((event) => event.event === 'model.pass');
+		expect(passes).toMatchObject([
+			{ instance: expect.any(String), pass: 1, inputTokens: 1000, outputTokens: 20 },
+			{ pass: 2, inputTokens: 1100, outputTokens: 30 },
+		]);
+		expect(typeof passes[0].ms).toBe('number');
+	});
+
+	it('carries the total across an approval pause', async () => {
+		const turn = await chak([
+			used(toolCall('create_ticket', { title: 'Monitor flickers', description: 'It flickers.' }), 900, 40),
+			used(text('Filed.'), 1000, 10),
+		]);
+		const paused = await turn.send({ question: 'My monitor flickers, please file a ticket' });
+		expect(paused.body.usage).toEqual({ passes: 1, inputTokens: 900, outputTokens: 40 });
+		const decided = await turn.send({ decision: { id: paused.body.approval.id, action: 'approve' } });
+		expect(decided.body.usage).toEqual({ passes: 2, inputTokens: 1900, outputTokens: 50 });
+	});
+
+	it('reports the passes that ran before a 500 or a 502', async () => {
+		const lookup = used(toolCall('lookup_ticket', { ticket_id: '42' }), 500, 10);
+		const endless = await chak([lookup, lookup, lookup, lookup, lookup]);
+		const stopped = await endless.send({ question: 'Look up ticket 42' });
+		expect(stopped.status).toBe(500);
+		expect(stopped.body.usage).toEqual({ passes: 5, inputTokens: 2500, outputTokens: 50 });
+
+		const consoleError = console.error;
+		console.error = () => {};
+		try {
+			const failing = await chak([lookup, new Error('AiError: 5006: Invalid input')]);
+			const failed = await failing.send({ question: 'Look up ticket 42' });
+			expect(failed.status).toBe(502);
+			expect(failed.body.usage).toEqual({ passes: 1, inputTokens: 500, outputTokens: 10 });
+		} finally {
+			console.error = consoleError;
+		}
+	});
+
+	it('leaves usage out when no pass reports it, and skips a pass that reports half', async () => {
+		const none = await chak([text('Hello.')]);
+		expect((await none.send({ question: 'Hi there!' })).body).not.toHaveProperty('usage');
+
+		const half = { ...(text('Hello.') as Exclude<Reply, Error>), usage: { prompt_tokens: 800 } };
+		const partial = await chak([used(toolCall('lookup_ticket', { ticket_id: '42' }), 700, 5), half]);
+		expect((await partial.send({ question: 'Look up ticket 42' })).body.usage).toEqual({ passes: 1, inputTokens: 700, outputTokens: 5 });
 	});
 });
 

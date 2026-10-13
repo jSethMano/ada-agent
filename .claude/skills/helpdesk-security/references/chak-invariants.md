@@ -16,6 +16,7 @@ Severity: **critical** (a visitor can act or read beyond their conversation, or 
 - The rate limit runs per IP before any routing. (`RATE_LIMITER`)
 - `filedBy` comes from the router (`this.name`), passed alongside the model's arguments, **never inside them**. A model-supplied `filedBy`, `triage`, or `priority` must never reach `ItAgent`. (`dispatchTool`'s `extra`)
 - `list_my_tickets` without a `filedBy` returns nothing, not everything. `filedBy` is never returned to a client. (`ItAgent.onRequest`)
+- `lookup_ticket` returns a ticket only to the conversation that filed it, plus the fixtures 42 and 77 to everyone. Another conversation's ticket, a ticket with no `filedBy`, and a request with none all get `{ found: false, ticket_id }`, the same result as an id never issued, so ids can't be probed. Calls parsed from text take the same path. (`filedByCaller`, `ItAgent.onRequest`)
 - `list_tickets` is router-only: it isn't in `TOOLS` or `TOOL_ROUTING`, so the model can't call it.
 - A tool the router runs itself (`LOCAL_TOOLS`, `src/index.ts`: today `search_kb`) gets the model's arguments only, never `extra`, and keeps no state. If one ever needs to know who is asking, it becomes a sub-agent call with router-supplied identity instead.
 - Only help articles are ever indexed, never tickets. Every visitor searches the same index, so an ingested ticket could be shown to another visitor.
@@ -64,7 +65,7 @@ Severity: **critical** (a visitor can act or read beyond their conversation, or 
 
 Not violations, but a review should know about them and not make them worse:
 
-1. **Any visitor can look up any ticket.** `lookup_ticket` isn't scoped by `filedBy`, ids are sequential from 78, and the result includes the description and triage. Anyone can enumerate every ticket in the shared store. Fine for a demo, but a real deployment needs scoping or authentication.
+1. **Triage shows other conversations' ticket ids.** Lookups are owner-only (2026-10-12), but triage's candidates are the fixtures and the 20 most recent tickets from every conversation. The `triage_ticket` row's `same_issue_as` answer lists each candidate's id with the probability that it is the same problem, and a link puts one id on the card and in the `create_ticket` result. No title, description, status, or assignee leaves triage, though a `duplicate_of` link says that ticket isn't resolved. Left as is by the user's decision (2026-10-12, `docs/decisions.md`): an id is a dead end, since looking it up gets the not-found result, and duplicate detection across visitors stays. Don't add ticket text to the triage row, the card, or the result. The owner is the conversation, not a person, until there is sign-in.
 2. **A pasted credential can still reach a reply, or a ticket while Jev is down.** The guard's `credential` is recorded only. The system prompt tells the model not to copy a secret, and triage holds a ticket whose text contains one (`contains_secret`), but replies have no code check, the hold fails open, and the visitor's own edits are never held.
 3. **Fail-open.** See above. With TypeSafe down, there's no guard, no triage hold, and no leak replacement.
 4. **Legacy route shim.** `/agents/ada/*` is rewritten to `/agents/chak/*`. Remove it once no client uses it, and don't extend it.

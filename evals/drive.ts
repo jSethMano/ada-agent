@@ -22,6 +22,8 @@ export type Sent = {
 
 export type StepRun = Sent & {
 	request: WireRequest;
+	// Set when the step went to the case's second conversation (`conversation: 'other'`).
+	instance?: string;
 	// Trace rows this response repeats from the paused turn it resumed. A
 	// step is graded on the rows after them.
 	prefix: number;
@@ -88,14 +90,21 @@ function traceLength(body: unknown): number {
 	return isRecord(body) && Array.isArray(body.trace) ? body.trace.length : 0;
 }
 
+/** The case's second conversation, for steps marked `conversation: 'other'`. */
+export function otherInstance(instance: string): string {
+	return `${instance}-other`;
+}
+
 /**
- * Runs every step of `testCase` against `instance`. Never throws for a bad
- * response: every response is recorded as it came. Stops early only when a
- * step needs a ticket id an earlier step failed to capture.
+ * Runs every step of `testCase` against `instance`, or its second
+ * conversation where a step says so. `send` gets the instance to post to.
+ * Never throws for a bad response: every response is recorded as it came.
+ * Stops early only when a step needs a ticket id an earlier step failed to
+ * capture.
  */
 export async function driveCase(
 	testCase: EvalCase,
-	opts: { rep: number; instance: string; send: (request: WireRequest) => Promise<Sent>; newId?: () => string },
+	opts: { rep: number; instance: string; send: (request: WireRequest, instance: string) => Promise<Sent>; newId?: () => string },
 ): Promise<CaseRun> {
 	const newId = opts.newId ?? (() => crypto.randomUUID());
 	const run: CaseRun = { caseId: testCase.id, harness: testCase.harness, rep: opts.rep, instance: opts.instance, steps: [], captures: {} };
@@ -105,6 +114,8 @@ export async function driveCase(
 	for (const [index, step] of testCase.steps.entries()) {
 		let request: WireRequest;
 		let prefix = 0;
+		const other = 'say' in step && step.conversation === 'other';
+		const instance = other ? otherInstance(opts.instance) : opts.instance;
 		if ('say' in step) {
 			const missing: string[] = [];
 			const question = step.say.replace(/\{\{(\w+)\}\}/g, (placeholder, name: string) => {
@@ -127,11 +138,12 @@ export async function driveCase(
 			prefix = pausedTraceLength;
 		}
 
-		const sent = await opts.send(request);
-		const stepRun: StepRun = { request, ...sent, prefix };
+		const sent = await opts.send(request, instance);
+		const stepRun: StepRun = { request, ...sent, prefix, ...(other ? { instance } : {}) };
 		run.steps.push(stepRun);
 
-		const approval = approvalIn(sent.body);
+		// Decisions go to the first conversation, so only its cards count.
+		const approval = other ? null : approvalIn(sent.body);
 		if (approval) {
 			latest = approval;
 			pausedTraceLength = traceLength(sent.body);

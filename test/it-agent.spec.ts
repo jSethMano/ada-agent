@@ -35,12 +35,12 @@ const CREATE = { tool: 'create_ticket', args: { title: 'Screen flickers', descri
 describe('ItAgent', () => {
 	it('stores the triage and priority, returns them on create, and on lookup', async () => {
 		const call = itAgent();
-		const created = await call({ ...CREATE, triage: TRIAGE, priority: 'P3' });
+		const created = await call({ ...CREATE, triage: TRIAGE, priority: 'P3', filedBy: 'visitor-a' });
 		expect(created).toEqual({ created: true, id: '78', priority: 'P3', title: 'Screen flickers', status: 'open', triage: TRIAGE });
 		// Priority comes right after the id, so the trace's preview shows it.
 		expect(Object.keys(created).slice(0, 3)).toEqual(['created', 'id', 'priority']);
 
-		const found = await call({ tool: 'lookup_ticket', args: { ticket_id: '78' } });
+		const found = await call({ tool: 'lookup_ticket', args: { ticket_id: '78' }, filedBy: 'visitor-a' });
 		expect(found).toMatchObject({ found: true, id: '78', priority: 'P3', triage: TRIAGE });
 	});
 
@@ -106,8 +106,93 @@ describe('ItAgent', () => {
 		const call = itAgent();
 		const created = await call({ ...CREATE, filedBy: 'visitor-a' });
 		expect(created).not.toHaveProperty('filedBy');
-		expect(await call({ tool: 'lookup_ticket', args: { ticket_id: '78' } })).not.toHaveProperty('filedBy');
+		const found = await call({ tool: 'lookup_ticket', args: { ticket_id: '78' }, filedBy: 'visitor-a' });
+		expect(found).toMatchObject({ found: true, id: '78' });
+		expect(found).not.toHaveProperty('filedBy');
 		const listed = await call({ tool: 'list_tickets', args: { limit: 5 } });
 		expect((listed.tickets as unknown[]).at(-1)).toEqual({ id: '78', title: 'Screen flickers', status: 'open' });
+	});
+});
+
+// Owner-only lookups (user decision, 2026-10-12). Ids are sequential, so
+// anything another conversation can tell apart from "not found" lets a
+// visitor map the store by counting up.
+describe('ItAgent lookup_ticket', () => {
+	const lookup = (ticketId: unknown, filedBy?: string) => ({
+		tool: 'lookup_ticket',
+		args: { ticket_id: ticketId },
+		...(filedBy === undefined ? {} : { filedBy }),
+	});
+
+	it("returns the conversation's own ticket in full, but never who filed it", async () => {
+		const call = itAgent();
+		await call({ ...CREATE, triage: TRIAGE, priority: 'P3', filedBy: 'visitor-a' });
+		expect(await call(lookup('78', 'visitor-a'))).toEqual({
+			found: true,
+			id: '78',
+			title: 'Screen flickers',
+			description: 'It flickers.',
+			status: 'open',
+			assignee: 'unassigned',
+			priority: 'P3',
+			triage: TRIAGE,
+		});
+		// The model sends numbers for string ids; that still finds it.
+		expect(await call(lookup(78, 'visitor-a'))).toMatchObject({ found: true, id: '78' });
+	});
+
+	it("answers another conversation's ticket exactly as it answers an id that was never issued", async () => {
+		const call = itAgent();
+		await call({ ...CREATE, filedBy: 'visitor-a' });
+		const theirs = await call(lookup('78', 'visitor-b'));
+		expect(theirs).toEqual({ found: false, ticket_id: '78' });
+		// The same keys, in the same order, with nothing about the ticket.
+		const never = await call(lookup('79', 'visitor-b'));
+		expect(Object.keys(theirs)).toEqual(Object.keys(never));
+		expect(never).toEqual({ found: false, ticket_id: '79' });
+	});
+
+	it('shows the fixtures to every conversation, and to a request with no caller', async () => {
+		const call = itAgent();
+		for (const filedBy of ['visitor-a', 'visitor-b', undefined]) {
+			expect(await call(lookup('42', filedBy)), String(filedBy)).toEqual({
+				found: true,
+				id: '42',
+				title: 'VPN keeps disconnecting',
+				status: 'in_progress',
+				assignee: 'sam@company.com',
+			});
+			expect(await call(lookup(77, filedBy)), String(filedBy)).toMatchObject({ found: true, id: '77', status: 'resolved' });
+		}
+	});
+
+	it('finds nothing for a missing or empty caller, even when the model names one in args', async () => {
+		const call = itAgent();
+		await call({ ...CREATE, filedBy: 'visitor-a' });
+		const notFound = { found: false, ticket_id: '78' };
+		expect(await call(lookup('78'))).toEqual(notFound);
+		expect(await call(lookup('78', ''))).toEqual(notFound);
+		expect(await call({ tool: 'lookup_ticket', args: { ticket_id: '78', filedBy: 'visitor-a' } })).toEqual(notFound);
+	});
+
+	it("treats a ticket with no filedBy, filed before it was kept, as nobody's", async () => {
+		const call = itAgent();
+		await call(CREATE);
+		expect(await call(lookup('78', 'visitor-a'))).toEqual({ found: false, ticket_id: '78' });
+		// An empty caller never matches a ticket that has no owner either.
+		expect(await call(lookup('78', ''))).toEqual({ found: false, ticket_id: '78' });
+	});
+
+	it('finds nothing for an id that names a property every object has', async () => {
+		const call = itAgent();
+		for (const id of ['__proto__', 'constructor', 'toString']) {
+			expect(await call(lookup(id, 'visitor-a')), id).toEqual({ found: false, ticket_id: id });
+		}
+	});
+
+	it('still rejects an id it cannot read', async () => {
+		const call = itAgent();
+		expect(await call(lookup('x'.repeat(33), 'visitor-a'))).toEqual({ found: false, error: 'invalid ticket_id' });
+		expect(await call(lookup({ id: 42 }, 'visitor-a'))).toEqual({ found: false, error: 'invalid ticket_id' });
 	});
 });

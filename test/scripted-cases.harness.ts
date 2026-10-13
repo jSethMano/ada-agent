@@ -103,11 +103,13 @@ for (const testCase of SCRIPTED) {
 		const run = await driveCase(testCase, {
 			rep: 1,
 			instance,
-			send: async (request) => {
+			// `to` is always `instance`: test/eval-cases.spec.ts keeps second
+			// conversations out of scripted cases, whose fakes are set on this one.
+			send: async (request, to) => {
 				const started = Date.now();
 				// A new address per request, so the simulated rate limiter never
 				// turns a scripted step into a 429.
-				const response = await SELF.fetch(`https://example.com/agents/chak/${instance}`, {
+				const response = await SELF.fetch(`https://example.com/agents/chak/${to}`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': `198.51.100.${++address % 250}` },
 					body: JSON.stringify(request),

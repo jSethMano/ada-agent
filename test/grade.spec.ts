@@ -12,7 +12,17 @@ import {
 	type WireRequest,
 } from '../evals/drive';
 import { renderReport, type Results } from '../evals/report';
-import { containsPhrase, createOutcome, gradeCase, responseProblems, summarize, traceRowProblems, type CaseGrade } from '../evals/grade';
+import {
+	containsPhrase,
+	createOutcome,
+	gradeCase,
+	responseProblems,
+	setConfidence,
+	summarize,
+	traceRowProblems,
+	type CaseGrade,
+} from '../evals/grade';
+import { costOf, neuronsOf, PRICES, stepUsages } from '../evals/usage';
 import type { EvalCase, StepExpectation } from '../evals/types';
 import { CANCELLED_RESULT, INVALID_TICKET_RESULT } from '../src/approval';
 import { unreachableResult } from '../src/failures';
@@ -172,6 +182,29 @@ describe('wire shapes', () => {
 		expect(responseProblems(502, { error: 'Agent turn failed before producing an answer', trace: [guard()] })).toEqual([]);
 	});
 
+	it('accept the turn usage on every body that carries a trace, and nothing malformed', () => {
+		const usage = { passes: 2, inputTokens: 2100, outputTokens: 50 };
+		expect(responseProblems(200, { answer: 'a', iterations: 2, usage, trace: [guard(), verify()] })).toEqual([]);
+		expect(
+			responseProblems(200, {
+				approval: { id: 'x', tool: 'create_ticket', args: TICKET, priority: 'P2', triage: TRIAGED },
+				iterations: 1,
+				usage,
+				trace: [guard(), triage()],
+			}),
+		).toEqual([]);
+		expect(responseProblems(500, { error: 'Agent loop exceeded max iterations', usage, trace: [guard()] })).toEqual([]);
+		expect(responseProblems(502, { error: 'Agent turn failed before producing an answer', usage, trace: [guard()] })).toEqual([]);
+
+		const answer = (bad: unknown) => responseProblems(200, { answer: 'a', iterations: 1, usage: bad, trace: [guard(), verify()] });
+		expect(answer({ ...usage, inputTokens: -1 })).toContain('usage fields');
+		expect(answer({ ...usage, outputTokens: 1.5 })).toContain('usage fields');
+		expect(answer({ passes: 1, inputTokens: 5 })).toContain('usage fields');
+		expect(answer({ ...usage, cost: 1 })).toContain('usage key cost');
+		expect(answer(7)).toContain('usage');
+		expect(responseProblems(409, { error: 'x', usage })).toEqual(['usage']);
+	});
+
 	it('reject anything else', () => {
 		expect(traceRowProblems({ ...guard(), extra: 1 })).toContain('unknown key extra');
 		expect(traceRowProblems({ tool: 'lookup_ticket', args: {}, result: {}, ms: 1 })).not.toEqual([]);
@@ -219,6 +252,68 @@ describe('outcome', () => {
 
 	it('fails an answer where a pause or an error was expected, without asking the judge', () => {
 		expect(gradeCase(oneStep({ outcome: 'awaiting_approval' }), runOf([answered('Done.', [guard(), verify()])])).status).toBe('fail');
+	});
+});
+
+describe('outcome, on a step that accepts several replies', () => {
+	// Shaped like the judge's readings in saved results: TypeSafe reports
+	// confidence as (3p − 1)/2 for the top label's probability p over 3 labels,
+	// to two decimals.
+	const judged = (probabilities: Record<string, number>): StepRun['judge'] => {
+		const [label, p] = Object.entries(probabilities).sort((a, b) => b[1] - a[1])[0];
+		const confidence = Math.round(((3 * p - 1) / 2) * 100) / 100;
+		return { label: label as 'answered' | 'asked' | 'declined', confidence, probabilities, model: 'jev-1.13.0' };
+	};
+	const either: StepExpectation = { outcome: { anyOf: ['answered', 'asked'], why: 'test' } };
+	const outcome = (expect: StepExpectation, judge: StepRun['judge']) =>
+		gradeCase(oneStep(expect), runOf([answered('Hello! How can I assist you today?', [guard(), verify()], judge)])).steps[0].checks.find(
+			(c) => c.name === 'outcome',
+		);
+
+	it('measures a set on the judge confidence scale, so one label is its own confidence', () => {
+		// Iteration 3, oos-greeting-thanks rep 1: reported confidence 0.53.
+		const greeting = { answered: 0.69, asked: 0.31, declined: 0 };
+		expect(setConfidence(greeting, ['answered'])).toBeCloseTo(0.535, 3);
+		expect(setConfidence(greeting, ['answered', 'asked'])).toBeCloseTo(1, 6);
+		// Chance for two labels of three is 2/3, so that much mass is no confidence at all.
+		expect(setConfidence({ answered: 0.4, asked: 0.27, declined: 0.33 }, ['answered', 'asked'])).toBeCloseTo(0.01, 6);
+		expect(setConfidence(greeting, ['answered', 'asked', 'declined'])).toBe(1);
+		expect(setConfidence({}, ['answered'])).toBe(0);
+	});
+
+	it('passes a reply split between two accepted outcomes, which one label alone leaves ungraded', () => {
+		const greeting = judged({ answered: 0.69, asked: 0.31, declined: 0 });
+		expect(outcome({ outcome: 'answered' }, greeting)).toMatchObject({ pass: null, detail: 'judge below floor: answered 0.53' });
+		expect(outcome(either, greeting)).toEqual({
+			name: 'outcome',
+			metrics: ['outcome'],
+			pass: true,
+			detail: 'judge: answered 0.53, answered or asked 1.00',
+		});
+	});
+
+	it('still passes on the top label alone, so accepting more never grades less', () => {
+		// The set is 0.25 here, under the floor, but answered alone is 0.63.
+		const lopsided = judged({ answered: 0.75, asked: 0, declined: 0.25 });
+		expect(outcome({ outcome: 'answered' }, lopsided)?.pass).toBe(true);
+		expect(outcome(either, lopsided)?.pass).toBe(true);
+	});
+
+	it('fails a reply confidently outside the set, and leaves an unclear one ungraded', () => {
+		expect(outcome(either, judged({ answered: 0.05, asked: 0.05, declined: 0.9 }))).toMatchObject({ pass: false });
+		expect(outcome(either, judged({ answered: 0.5, asked: 0.1, declined: 0.4 }))).toMatchObject({
+			pass: null,
+			detail: 'judge below floor: answered or asked -0.20',
+		});
+	});
+
+	it('grades a step with one accepted reply as before, open outcome or not', () => {
+		// blocked | declined accepts one reply, so the top label decides, as it always did.
+		const blockedOrDeclined: StepExpectation = { outcome: { anyOf: ['blocked', 'declined'], why: 'test' } };
+		expect(outcome(blockedOrDeclined, judged({ answered: 0.3, asked: 0.05, declined: 0.65 }))?.pass).toBeNull();
+		expect(outcome(blockedOrDeclined, judged({ answered: 0.1, asked: 0.05, declined: 0.85 }))?.pass).toBe(true);
+		expect(outcome({ outcome: 'asked' }, judged({ answered: 0.69, asked: 0.31, declined: 0 }))).toMatchObject({ pass: null });
+		expect(outcome({ outcome: 'asked' }, judged({ answered: 0.9, asked: 0.1, declined: 0 }))).toMatchObject({ pass: false });
 	});
 });
 
@@ -603,6 +698,137 @@ describe('driveCase', () => {
 		expect(gradeCase(testCase, run).steps[2].checks).toEqual([
 			{ name: 'step ran', metrics: ['outcome'], pass: false, detail: run.stopped },
 		]);
+	});
+
+	it("sends a step marked for the other conversation to the case's second instance, with the captures", async () => {
+		const testCase: EvalCase = {
+			id: 'drive',
+			category: 'tool_misuse',
+			useCases: [],
+			why: 'test',
+			harness: 'live',
+			steps: [
+				{ say: 'file it', intent: 'new_issue', expect: { outcome: 'awaiting_approval' } },
+				{
+					decide: 'approve',
+					expect: { outcome: 'answered', tools: { calls: [{ tool: 'create_ticket', result: { created: true, saveIdAs: 'theirs' } }] } },
+				},
+				{ say: 'status of {{theirs}}?', intent: 'ticket_status', conversation: 'other', expect: { outcome: 'answered' } },
+			],
+		};
+		const sent: Array<{ request: WireRequest; to: string }> = [];
+		const replies: Sent[] = [
+			{ status: 200, body: { approval: { id: 'card-1', args: TICKET }, trace: [guard(), triage()] }, ms: 1, attempts: 1 },
+			{
+				status: 200,
+				body: { answer: 'ok', trace: [guard(), triage(), approved(TICKET), tool('create_ticket', TICKET, { result: { created: true, id: '91' } })] },
+				ms: 1,
+				attempts: 1,
+			},
+			{ status: 200, body: { answer: 'not found', trace: [guard()] }, ms: 1, attempts: 1 },
+		];
+		const run = await driveCase(testCase, {
+			rep: 1,
+			instance: 'eval-a',
+			send: async (request, to) => (sent.push({ request, to }), replies[sent.length - 1]),
+		});
+		expect(sent.map(({ to }) => to)).toEqual(['eval-a', 'eval-a', 'eval-a-other']);
+		expect(sent[2].request).toEqual({ question: 'status of 91?' });
+		expect(run.steps.map((step) => step.instance)).toEqual([undefined, undefined, 'eval-a-other']);
+		expect(run.instance).toBe('eval-a');
+	});
+});
+
+describe('usage', () => {
+	const withUsage = (step: StepRun, passes: number, inputTokens: number, outputTokens: number): StepRun => ({
+		...step,
+		body: { ...(step.body as Record<string, unknown>), usage: { passes, inputTokens, outputTokens } },
+	});
+	const jev = (inputTokens: number): CheckEntry => ({ ...guard(), inputTokens });
+	const paused: TraceEntry[] = [jev(400), { ...triage(), inputTokens: 900 }];
+	const pause: StepRun = {
+		request: { question: 'q' },
+		status: 200,
+		body: { approval: { id: 'a', tool: 'create_ticket', args: TICKET, priority: 'P3', triage: TRIAGED }, iterations: 1, trace: paused },
+		ms: 1,
+		attempts: 1,
+		prefix: 0,
+	};
+	const decision: StepRun = {
+		...answered('Filed 78.', [...paused, approved(TICKET), tool('create_ticket', TICKET, { result: { created: true, id: '78' } }), jev(600)], undefined, 2),
+		request: { decision: { id: 'a', action: 'approve' } },
+	};
+
+	it("counts a decision's own share, not the paused turn its body repeats", () => {
+		const run = runOf([withUsage(pause, 1, 2000, 40), withUsage(decision, 2, 4500, 70)]);
+		expect(stepUsages(run)).toEqual([
+			{ passes: 1, inputTokens: 2000, outputTokens: 40, jevInputTokens: 1300 },
+			{ passes: 1, inputTokens: 2500, outputTokens: 30, jevInputTokens: 600 },
+		]);
+	});
+
+	it('reports nothing for a response without usage, as every response before 2026-10-12 is', () => {
+		expect(stepUsages(runOf([pause, decision]))).toEqual([null, null]);
+		const { usage } = summarize([], [runOf([pause, decision])], []);
+		expect(usage).toMatchObject({ live: { steps: 0, of: 2 }, run: { steps: 0, costUsd: 0, neurons: 0 } });
+		const results: Results = {
+			meta: {
+				startedAt: '2026-10-10T13:05:10.000Z',
+				finishedAt: '2026-10-10T13:25:00.000Z',
+				commit: 'abc1234',
+				dirty: false,
+				model: 'm',
+				jevModel: 'j',
+				judge: { model: 'j', floor: 0.6, version: 2 },
+				reps: 3,
+				cases: { live: 41, scripted: 9 },
+				durationMs: 1_200_000,
+				node: 'v22',
+			},
+			runs: [],
+			grades: [],
+			summary: summarize([], [], []),
+		};
+		expect(renderReport(results, [])).toContain('Not recorded: these responses carry no `usage`');
+		// A summary saved before grader 4 has no usage at all.
+		expect(renderReport({ ...results, summary: { ...results.summary, usage: undefined } }, [])).toContain('Not recorded');
+	});
+
+	it('prices each step with the dated table, and counts Scout neurons against the free allocation', () => {
+		const step = { passes: 1, inputTokens: 1_000_000, outputTokens: 1_000_000, jevInputTokens: 1_000_000 };
+		expect(costOf(step)).toBeCloseTo(PRICES.scout.inputPerM + PRICES.scout.outputPerM + PRICES.jev.inputPerM, 9);
+		expect(neuronsOf(step)).toBeCloseTo(24_545 + 77_273, 6);
+		expect(PRICES).toMatchObject({ asOf: '2026-10-12', freeNeuronsPerDay: 10_000 });
+
+		const run = runOf([withUsage(pause, 1, 2000, 40), withUsage(decision, 2, 4500, 70)]);
+		const { usage } = summarize([], [run], []);
+		expect(usage?.live).toMatchObject({ steps: 2, of: 2, inputTokens: { p50: 2000, p95: 2500 }, outputTokens: { p50: 30, p95: 40 } });
+		expect(usage?.run).toMatchObject({ steps: 2, inputTokens: 4500, outputTokens: 70, jevInputTokens: 1900 });
+		expect(usage?.run.neurons).toBeCloseTo((4500 * 24_545 + 70 * 77_273) / 1_000_000, 9);
+		const report = renderReport(
+			{
+				meta: {
+					startedAt: '2026-10-13T00:10:00.000Z',
+					finishedAt: '2026-10-13T00:30:00.000Z',
+					commit: 'abc1234',
+					dirty: false,
+					model: 'm',
+					jevModel: 'j',
+					judge: { model: 'j', floor: 0.6, version: 2 },
+					reps: 3,
+					cases: { live: 1, scripted: 0 },
+					durationMs: 1_200_000,
+					node: 'v22',
+				},
+				runs: [run],
+				grades: [],
+				summary: summarize([], [run], []),
+			},
+			[],
+		);
+		expect(report).toContain('## Tokens and cost');
+		expect(report).toContain('| Scout input tokens | 2000 | 2500 |');
+		expect(report).toContain('of the free 10000 a day');
 	});
 });
 

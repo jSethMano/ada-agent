@@ -18,6 +18,7 @@ import { blockRule, runInputGuard } from './jev/input-guard';
 import { HELD_RESULT, runTriageTicket, type Priority, type TicketTriage, type TriageCandidate } from './jev/triage-ticket';
 import { runVerifyAnswer } from './jev/verify-answer';
 import { searchKb } from './kb';
+import { addUsage, usageOf } from './model-usage';
 import { SECRET_NOTICE, sharedSecret } from './secret-notice';
 import { SYSTEM_PROMPT } from './system-prompt';
 import { textToolCall } from './text-tool-call';
@@ -48,7 +49,7 @@ const TOOLS = [
 				'describes without asking for a ticket. Do not call it when the user asks for a ticket (file, log, open, or raise ' +
 				'one, or contact IT) or for something only IT staff can do: call create_ticket instead. Not for looking up or ' +
 				'listing tickets, questions outside IT, or greetings. ' +
-				'The result lists the closest articles, best first, each with its overview, symptoms, steps, and file_ticket_when ' +
+				'The result lists the closest articles, best first, each with its summary, steps, if_not, and file_ticket_when ' +
 				'(when to file a ticket). Use an article only if it fits the problem: give its steps and name its title. Call ' +
 				"create_ticket only if the article's file_ticket_when fits what the user said, or the user says they already tried " +
 				'the steps. If no article fits, give brief general advice and say plainly that it is general advice, not from the ' +
@@ -116,7 +117,7 @@ const TOOLS = [
 				"List the IT tickets filed in this conversation, newest first, with each one's id, title, status, and " +
 				'priority (null when it has none). `total` is how many there are, which can exceed the tickets listed. Use ' +
 				'when the user asks what tickets they have, or means one of theirs without giving its number. Tickets filed ' +
-				'in other conversations are not included; to check one of those, ask the user for its number and use lookup_ticket.',
+				'in other conversations are not included, and cannot be looked up from here.',
 			parameters: { type: 'object', properties: {} },
 		},
 	},
@@ -135,9 +136,10 @@ type IttTicket = {
 	// before triage existed; null when triage failed.
 	priority?: Priority | null;
 	triage?: TicketTriage;
-	// The Chak instance that filed it, so list_my_tickets can find it. Never
-	// returned: the instance name is the key to that visitor's conversation.
-	// Absent on fixtures and on tickets filed before listing existed.
+	// The Chak instance that filed it, so list_my_tickets can find it and only
+	// that conversation can look it up. Never returned: the instance name is the
+	// key to that visitor's conversation. Absent on fixtures and on tickets
+	// filed before listing existed.
 	filedBy?: string;
 };
 
@@ -149,14 +151,16 @@ type AIResult = {
 		};
 	}>;
 	response?: string;
+	// Read by usageOf, which checks it.
+	usage?: unknown;
 };
 
 // `args` is what the model wrote. Everything else comes from the router: the
-// triage for a new ticket, `filedBy` (the conversation filing or listing), and
-// `list_tickets`, which the model cannot call (it is not in TOOLS or
-// TOOL_ROUTING): it lists every visitor's tickets, for triage.
+// triage for a new ticket, `filedBy` (the conversation filing, listing, or
+// looking up), and `list_tickets`, which the model cannot call (it is not in
+// TOOLS or TOOL_ROUTING): it lists every visitor's tickets, for triage.
 type ToolRequest =
-	| { tool: 'lookup_ticket'; args: { ticket_id: string } }
+	| { tool: 'lookup_ticket'; args: { ticket_id: string }; filedBy?: string }
 	| {
 			tool: 'create_ticket';
 			args: { title: string; description: string };
@@ -253,6 +257,13 @@ const FAKE_TICKETS: Record<string, IttTicket> = {
 type ChakState = { history: HistoryEntry[]; pending?: PendingApproval | null };
 type ItAgentState = { tickets: Record<string, IttTicket>; lastTicketId: number };
 
+// Whether `caller`, the router's `filedBy`, is the conversation that filed this
+// ticket. A request without a caller owns nothing, and a ticket filed before
+// `filedBy` existed belongs to no conversation, so neither can ever match.
+function filedByCaller(ticket: IttTicket, caller: unknown): boolean {
+	return typeof caller === 'string' && caller.length > 0 && ticket.filedBy === caller;
+}
+
 export class ItAgent extends Agent<Env, ItAgentState> {
 	// 77 is the highest seeded fixture, so the first real ticket is 78 and the
 	// numbering reads as one continuous sequence.
@@ -274,7 +285,19 @@ export class ItAgent extends Agent<Env, ItAgentState> {
 				if (typeof ticketId !== 'string' || ticketId.length > MAX_TICKET_ID_LENGTH) {
 					return Response.json({ result: { found: false, error: 'invalid ticket_id' } });
 				}
-				const ticket = this.state.tickets[ticketId] ?? FAKE_TICKETS[ticketId];
+				// Only the conversation that filed a ticket can read it; the fixtures
+				// are everyone's. Ids are sequential from 78, so before this any
+				// visitor could read every other visitor's tickets by counting up
+				// (user decision, 2026-10-12). Another conversation's ticket takes the
+				// not-found branch below, so its result is the same as for an id that
+				// was never issued, and an id cannot be probed. Own keys only, so
+				// "__proto__" is not found either.
+				const stored = Object.hasOwn(this.state.tickets, ticketId) ? this.state.tickets[ticketId] : undefined;
+				const ticket = Object.hasOwn(FAKE_TICKETS, ticketId)
+					? FAKE_TICKETS[ticketId]
+					: stored && filedByCaller(stored, body.filedBy)
+						? stored
+						: undefined;
 				if (!ticket) {
 					return Response.json({ result: { found: false, ticket_id: ticketId } });
 				}
@@ -342,11 +365,7 @@ export class ItAgent extends Agent<Env, ItAgentState> {
 			case 'list_my_tickets': {
 				// Only the tickets this conversation filed, newest first. A request
 				// without filedBy lists none rather than everyone's.
-				const filedBy = body.filedBy;
-				const mine =
-					typeof filedBy === 'string' && filedBy.length > 0
-						? Object.values(this.state.tickets).filter((ticket) => ticket.filedBy === filedBy)
-						: [];
+				const mine = Object.values(this.state.tickets).filter((ticket) => filedByCaller(ticket, body.filedBy));
 				const tickets = mine
 					.sort((a, b) => Number(b.id) - Number(a.id))
 					.slice(0, MAX_LISTED_TICKETS)
@@ -481,8 +500,13 @@ export class Chak extends Agent<Env, ChakState> {
 		// Every exit after this point goes through here, so every response carries
 		// the full trace in the order things ran: the guard, then the loop's steps,
 		// on both sides of any pause, then the answer check when there is an answer.
+		// `usage` is the turn's model tokens so far, like `iterations`. Optional,
+		// so front ends and results files from before it still read the body.
 		const respond = (body: Record<string, unknown>, status = 200, after: CheckEntry[] = []) =>
-			Response.json({ ...body, trace: [turn.guard, ...turn.steps, ...after] }, { status });
+			Response.json(
+				{ ...body, ...(turn.usage ? { usage: turn.usage } : {}), trace: [turn.guard, ...turn.steps, ...after] },
+				{ status },
+			);
 
 		// Saved in the Durable Object, so the decision can arrive in any later
 		// request, including after the visitor reloads the page.
@@ -574,7 +598,8 @@ export class Chak extends Agent<Env, ChakState> {
 
 	/**
 	 * One model pass. Sent once more when the connection to Workers AI dropped
-	 * (see isDroppedConnection); any other error ends the turn with a 502.
+	 * (see isDroppedConnection); any other error ends the turn with a 502. Adds
+	 * the pass's token usage to the turn, and logs it.
 	 */
 	private async runModel(turn: TurnProgress): Promise<AIResult> {
 		const request = async () =>
@@ -582,13 +607,29 @@ export class Chak extends Agent<Env, ChakState> {
 				messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...this.state.history, ...turn.newTurn],
 				tools: TOOLS,
 			} as any)) as AIResult;
+		const startedAt = Date.now();
+		let result: AIResult;
 		try {
-			return await request();
+			result = await request();
 		} catch (error) {
 			if (!isDroppedConnection(error)) throw error;
 			console.log(JSON.stringify({ event: 'model.retried', instance: this.name, detail: String(error).slice(0, 300) }));
-			return await request();
+			result = await request();
 		}
+		// A pass that threw has no usage to read, so a 502's total covers the passes before it.
+		const usage = usageOf(result);
+		turn.usage = addUsage(turn.usage, usage);
+		console.log(
+			JSON.stringify({
+				event: 'model.pass',
+				instance: this.name,
+				pass: turn.passes + 1,
+				inputTokens: usage?.inputTokens ?? null,
+				outputTokens: usage?.outputTokens ?? null,
+				ms: Date.now() - startedAt,
+			}),
+		);
+		return result;
 	}
 
 	/**
@@ -654,8 +695,8 @@ export class Chak extends Agent<Env, ChakState> {
 				continue;
 			}
 
-			// `filedBy` is set here, never by the model, so a visitor cannot list
-			// another conversation's tickets. ItAgent ignores it on a lookup.
+			// `filedBy` is set here, never by the model, so a visitor can neither
+			// list nor look up another conversation's tickets.
 			const dispatchedAt = Date.now();
 			const result = await dispatchTool(this.env, { name: call.function.name, arguments: args }, { filedBy: this.name }, this.name);
 			this.recordToolResult(turn, call, args, result, Date.now() - dispatchedAt, origin);

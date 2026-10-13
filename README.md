@@ -87,7 +87,7 @@ Each turn, the model does one of these, as the system prompt (`src/system-prompt
 
 - **Search the help articles** with `search_kb` for a how-to or troubleshooting question, or a problem described without asking for a ticket. It gives the steps of the article that fits and names it. When no article fits, it gives brief advice and says it is general.
 - **Answer directly:** what something is ("what is a VPN?").
-- **Look up:** a ticket by number with `lookup_ticket`, or this conversation's tickets with `list_my_tickets`.
+- **Look up:** a ticket by number with `lookup_ticket`, or this conversation's tickets with `list_my_tickets`. Both see only the tickets this conversation filed, plus the fixtures.
 - **Propose a ticket** with `create_ticket`:
   - when the visitor asks for one about a problem;
   - for something only IT staff can do (email IT, reset a password, grant access, install software, a lost or stolen device);
@@ -106,7 +106,7 @@ It reports only what a tool result confirms. The code checks the rest: guard, ar
 | Tool | What it does |
 | --- | --- |
 | `search_kb` | Searches the 15 demo help articles in `kb/articles` and returns up to 3, best first, with their steps and when to file a ticket. Runs in the router. **Indexed 2026-10-11, not yet measured.** |
-| `lookup_ticket` | Looks up a ticket by id. Tickets `42` and `77` are seeded fixtures. An id with no digit in it is refused by the router before it reaches ItAgent. |
+| `lookup_ticket` | Looks up a ticket by id: one this conversation filed, or the seeded fixtures `42` and `77`. Any other id, another conversation's ticket included, comes back not found, the same as an id never issued. An id with no digit in it is refused by the router before it reaches ItAgent. |
 | `list_my_tickets` | Lists the tickets filed in this conversation, newest first. It never lists another conversation's tickets. |
 | `create_ticket` | Proposes a new ticket. The visitor approves, edits, or cancels it before it is filed. |
 
@@ -187,7 +187,7 @@ A case is a conversation: messages, plus approve, edit or cancel decisions. `npm
 **Method:**
 - **Driving:** each live case runs on a fresh conversation against a local `wrangler dev` (fresh state, so the ticket store holds only the fixtures), 3 times, paced under the rate limit.
 - **Scripted failures** (a dead ticket store, malformed model output, a model that never stops, a stale approval) run once in the test pool, with a scripted model or a faulted ItAgent (`test/scripted-cases.harness.ts`).
-- **Grading** reads only the saved responses (`evals/grade.ts`). The outcome (answered, asked, declined, blocked, awaiting approval, or error) comes from the trace. For answered, asked and declined, a Jev Choice judge decides (`evals/judge.ts`). Below 0.6 confidence the step is ungraded, never passed.
+- **Grading** reads only the saved responses (`evals/grade.ts`). The outcome (answered, asked, declined, blocked, awaiting approval, or error) comes from the trace. For answered, asked and declined, a Jev Choice judge decides (`evals/judge.ts`). Below 0.6 confidence the step is ungraded, never passed. Where a step accepts two replies, the floor applies to the two together.
 - **Expectations and invariants:** each step's expectations cover tools, arguments, approval, triage, answer phrases, leaks and secrets. Seven invariants are checked on every response, for example that a ticket is never filed without an approved decision.
 - **Corrections:** every label correction is recorded in [evals/ITERATIONS.md](evals/ITERATIONS.md) and applied to every earlier run. Each results file carries a grading stamp, so only like-graded runs are compared.
 
@@ -243,7 +243,7 @@ These results are iteration 3's. The help-article search added since changes beh
 
 ## Limitations
 
-- **Small, synthetic dataset.** 50 synthetic cases measured, of which 2 are not in English. Six help-article cases have been added since and not yet run.
+- **Small, synthetic dataset.** 50 synthetic cases measured, of which 2 are not in English. Seven cases have been added since and not yet run: six help-article cases, and a lookup from a second conversation.
   - Treating each case as one observation, a pass rate near 95% carries a 95% interval of about ±6 points (1.96·√(0.95·0.05/50)).
   - Repeating a case 3 times adds runs, not independent cases, so a difference of a few runs between iterations is within noise.
 - **A model judges outcomes.** Jev decides answered, asked, or declined. It can be unsure: greetings fell below its floor in version 2 and went ungraded.
@@ -253,7 +253,7 @@ These results are iteration 3's. The help-article search added since changes beh
   - Scout still attempts placeholder lookups, and only the router's guard stops them.
 - **Quota.** The free Workers AI allocation covers one full eval run a day.
 - **Latency rose in iteration 3** (p50 1776 → 2395 ms). Jev time per step did not change. The cause is not known.
-- **No authentication.** The instance id is the only key, and any visitor can look up any ticket by id.
+- **No authentication.** The instance id is the only key. A lookup finds only tickets its own conversation filed, so starting a new conversation loses access to earlier tickets, and triage's trace row still lists the ids of other conversations' recent tickets.
 - **No real ticketing system.** Tickets 42 and 77 are fixtures, and the store is one Durable Object.
 - **Edited ticket text is not screened.** The guard never sees it. The model has resisted it in every run so far, but nothing in code checks it.
 - **Checks fail open.** During a TypeSafe outage there is no guard, no hold, and no leak replacement.
@@ -368,6 +368,7 @@ Workers AI runs remotely even under `wrangler dev`, so a full turn needs a Cloud
 - [docs/decisions.md](docs/decisions.md): every design decision, with its evidence.
 - [docs/observability.md](docs/observability.md): how to debug a turn from its trace, logs, and state.
 - [docs/ai-assisted-development.md](docs/ai-assisted-development.md): how AI tools were used to build Chak, and how their output was checked.
+- [docs/production-requirements.md](docs/production-requirements.md): requirements and roadmap for running Chak at a real company (not yet designed or built).
 - [evals/ITERATIONS.md](evals/ITERATIONS.md): each eval run, what changed, and what moved.
 - The Jev design docs:
   - [requirements](docs/jev-requirements.md)

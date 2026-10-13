@@ -15,6 +15,7 @@ Any Chak turn can be debugged from three things: the trace in its response, the 
 | Validation | Trace | Results the router wrote: a lookup with no ticket number (`found: false`, "Not looked up"), create arguments over the limits (`created: false`), a held ticket (`created: false`, "Not filed: …"). Then the `verify_answer` row on the answer |
 | Approval state | Response body, then trace | A paused turn returns `approval: { id, args, priority, triage, notice? }`. The decision's response adds an `approval` row: `decision`, `edits`, and `ms` waited |
 | The final response | Response body | `answer`, `iterations`, `notice?`, or `error` with the status code |
+| Model tokens | Response body, then the log | `usage: { passes, inputTokens, outputTokens }` on every body that carries a trace, once a model pass has run: the turn's Scout tokens so far, on both sides of a pause, like `iterations`. Absent when no pass reported usage. Each pass is a `model.pass` log line |
 
 Every response that carries a trace starts with the `input_guard` row. An answered turn ends with the `verify_answer` row. A decision's response repeats the paused turn's rows, then adds its own.
 
@@ -104,6 +105,7 @@ One JSON line per event, written by `src/index.ts` and `src/jev/run-check.ts`. N
 | `tool_call.from_text` | The router parses a call from the reply's text | `instance`, `tool` |
 | `answer.replaced` | verify_answer's leak rule fires | `instance`, `rule: 'prompt_leak'` |
 | `model.retried` | A dropped Workers AI connection is retried | `instance`, `detail` |
+| `model.pass` | Every model pass that returned | `instance`, `pass` (1 for the turn's first), `inputTokens`, `outputTokens` (null when Workers AI reported none), `ms` (retry included) |
 | `tool.failed` (error) | ItAgent throws or answers with something that isn't JSON, or a `search_kb` call fails (including no `KB` binding) | `instance`, `tool`, `detail` |
 | `turn.failed` (error) | The turn ends in a 502 | `instance`, `detail` |
 
@@ -123,6 +125,6 @@ One JSON line per event, written by `src/index.ts` and `src/jev/run-check.ts`. N
 These are known gaps, not planned work.
 
 - **No pass index on a row.** The body's `iterations` counts model passes for the turn, but no row says which pass it came from.
-- **No model metrics.** There are no token counts and no per-pass model latency. Jev rows have `ms` and `inputTokens`, and tool rows have `ms`. A model pass has neither.
+- **No per-pass model metrics in the trace.** The body's `usage` sums the turn's model tokens, and each pass's tokens and time are in its `model.pass` log line, but no row stands for a model pass. Jev rows have `ms` and `inputTokens`, and tool rows have `ms`.
 - **No turn id.** A log line carries `instance`, so it can be matched to a conversation, but only by time to a single turn's trace.
 - **Traces are not stored.** The Worker returns a trace and keeps none. History keeps the messages, not the checks, so a past turn's trace exists only where the client or an eval saved it.

@@ -246,7 +246,7 @@ async function runLive(cases: EvalCase[], reps: number, port: number, resultsPat
 			for (const testCase of cases) {
 				const instance = `eval-${crypto.randomUUID()}`;
 				try {
-					const run = await driveCase(testCase, { rep, instance, send: send(instance) });
+					const run = await driveCase(testCase, { rep, instance, send: (request, to) => send(to)(request) });
 					runs.push(run);
 					const stopped = run.stopped ? ` (stopped: ${run.stopped})` : '';
 					console.log(`rep ${rep} ${testCase.id}: ${run.steps.map((step) => step.status).join(' ')}${stopped}`);
@@ -371,6 +371,10 @@ function save(results: Results, path: string) {
 	const metrics = saved.summary.metrics;
 	for (const [name, tally] of Object.entries(metrics)) {
 		console.log(`  ${name.padEnd(17)} ${tally.passed}/${tally.graded}${tally.ungraded ? `  (${tally.ungraded} ungraded)` : ''}`);
+	}
+	const usage = saved.summary.usage;
+	if (usage && usage.run.steps > 0) {
+		console.log(`  ${'neurons'.padEnd(17)} ${Math.round(usage.run.neurons)} for Scout, est. $${usage.run.costUsd.toFixed(4)} with Jev`);
 	}
 }
 

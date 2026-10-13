@@ -1,6 +1,6 @@
 ---
 name: chak-eval
-description: Run, extend, and read Chak's end-to-end agent eval in the ada-agent repo, which sends 56 labeled conversations through the public API and grades each turn from its response and trace. Covers adding or changing a case (the schema, labeling behavior rather than wording, product decisions, open outcomes, known gaps, secrets, placeholders, live versus scripted), running it (flags, fresh state, pacing, the Workers AI daily quota, INCOMPLETE runs, resuming), reading a report (metrics, ungraded versus failed versus known gap, flaky cases, noise), the iteration loop (baseline, one change at a time, regrading every run after a correction), and publishing results to the front-end page. Use when adding or relabeling an eval case, running npm run eval:agent, reading a results report, comparing iterations, or exporting results for the page.
+description: Run, extend, and read Chak's end-to-end agent eval in the ada-agent repo, which sends 57 labeled conversations through the public API and grades each turn from its response and trace. Covers adding or changing a case (the schema, labeling behavior rather than wording, product decisions, open outcomes, known gaps, secrets, placeholders, live versus scripted), running it (flags, fresh state, pacing, the Workers AI daily quota, INCOMPLETE runs, resuming), reading a report (metrics, ungraded versus failed versus known gap, flaky cases, noise), the iteration loop (baseline, one change at a time, regrading every run after a correction), and publishing results to the front-end page. Use when adding or relabeling an eval case, running npm run eval:agent, reading a results report, comparing iterations, or exporting results for the page.
 argument-hint: "[a case to add or change, a run to start, or a results file to read]"
 ---
 
@@ -25,6 +25,7 @@ Read [chak-backend](../chak-backend/SKILL.md) first if the work touches `src/`.
 | `evals/grade.ts` | `GRADER_VERSION` | Bumped when a grading change can change a grade |
 | `evals/judge.ts` | `JUDGE_VERSION` | The outcome judge's question, and its version |
 | `evals/run.ts` | `MIN_INTERVAL_MS` | The runner: pacing, the quota stop, checkpoints, regrading |
+| `evals/usage.ts` | `PRICES` | Tokens per step from the bodies' `usage` and the Jev rows, and their estimated cost from a dated price table |
 | `evals/page.config.ts` | `PAGE_CONFIG` | Which runs and featured cases the front-end page shows |
 | `evals/page.ts` | `comparabilityProblems` | Why results files cannot share a page |
 | `test/eval-cases.spec.ts` | `refsIn` | Keeps the dataset in step with the code (`npm test`) |
@@ -51,6 +52,7 @@ A case is one conversation on a fresh instance. Each step is a message (`say`) o
 - **Open outcomes stay rare.** `anyOf` with a `why` is only for where the code and prompt really leave two answers right. The spec caps them at 10% of steps.
 - **Known gaps:** when the label is the desired behavior and the code does not do it yet, add `knownGap: { today, note }`. A step that matches `today` is reported as a known gap, not a regression, but it still counts as failing in the metrics.
 - **The ticket store is shared across cases and runs.** Never assert a filed ticket's id or "no link". Capture an id with `saveIdAs`, use it as `{{name}}` in a message or `{ ref }` in a matcher, and link only to the fixtures, 42 and 77.
+- **A second visitor.** A message step with `conversation: 'other'` is sent from a second conversation of the case's own, for what one visitor must never see of another's (`misuse-lookup-other-conversation`). Captures carry over. Live cases only, and never a step that pauses: decisions go to the first conversation.
 - **`secrets`** lists values the visitor pastes. They are checked only where they leave the conversation: the answer, the approval card, and a filed ticket.
 - **Live or scripted:**
   - A live case runs against `wrangler dev`.
@@ -70,7 +72,7 @@ Run `npm test`. The dataset spec checks:
 ## 2. Running
 
 ```sh
-npm run eval:agent                                  # everything: 46 live cases × 3, 10 scripted × 1, about 22 min
+npm run eval:agent                                  # everything: 47 live cases × 3, 10 scripted × 1, about 22 min
 npm run eval:agent -- --cases a,b --reps 3          # a subset, for an early read
 npm run eval:agent -- --only scripted               # or --only live
 npm run eval:agent -- --port 8788                   # when your own wrangler dev holds 8787
@@ -108,7 +110,7 @@ The run writes `evals/results/<UTC time>-<sha>.json` and a `.md` report beside i
 - **fail:** a check failed.
 - **known gap:** the step failed its desired label but matched `knownGap.today`.
 - **ungraded:** nothing could be judged. A check is ungraded when:
-  - the judge's confidence is under the 0.6 floor;
+  - the judge's confidence is under the 0.6 floor. On a step that accepts several replies (`answered` or `asked`), the floor applies to them together, on the same scale (`setConfidence`), and the top label alone at the floor still passes;
   - a judgment rests on Jev and that check did not run;
   - the answer was replaced with fixed text.
 
@@ -119,6 +121,7 @@ The run writes `evals/results/<UTC time>-<sha>.json` and a `.md` report beside i
 - **`fromText`:** calls Scout wrote as text and the router parsed. Each is a model defect that the router covered for.
 - **Replaced:** answers verify_answer withheld for leaking the prompt.
 - **Latency:** p50 and p95 per live step. If it moves, compare the Jev rows' `ms` with the rest of the step before blaming a change.
+- **Tokens and cost:** Scout's input and output tokens per live step (p50 and p95), the estimated cost per step and per run, and the run's neurons against the free 10,000 a day, from the dated `PRICES` in `evals/usage.ts`. Runs before 2026-10-12 have no `usage` in their bodies, and the report says so.
 
 **Compare cases, not small percentages.** With 50 cases, a pass rate near 95% carries about ±6 points (1.96·√(0.95·0.05/50)), and the 3 reps of a case are not independent. Explain a move by the cases that turned green or red, from their traces.
 

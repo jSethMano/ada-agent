@@ -4,6 +4,7 @@
 import type { CaseRun } from './drive.ts';
 import { METRIC_INFO, type CaseGrade, type Metric, type Summary, type Tally } from './grade.ts';
 import type { EvalCase } from './types.ts';
+import { PRICES } from './usage.ts';
 
 export type ResultsMeta = {
 	startedAt: string;
@@ -40,6 +41,38 @@ function percent(tally: Tally): string {
 
 function cell(text: string): string {
 	return text.replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
+}
+
+// Costs are fractions of a cent per step, so they keep two significant figures.
+function usd(amount: number): string {
+	return amount === 0 ? '$0' : `$${amount.toPrecision(2)}`;
+}
+
+function usageLines(usage: Summary['usage']): string[] {
+	const lines = ['## Tokens and cost', ''];
+	if (!usage || usage.run.steps === 0) {
+		lines.push('Not recorded: these responses carry no `usage`. The Worker reports it from 2026-10-12 (`src/model-usage.ts`).', '');
+		return lines;
+	}
+	const { live, run } = usage;
+	lines.push(
+		`Scout's tokens come from each body's \`usage\`, and Jev's input tokens from its check rows, per step: a decision's own ` +
+			`share, without the paused turn it resumed. Prices as of ${usage.pricesAsOf} (\`PRICES\`, \`evals/usage.ts\`). The ` +
+			"help-article query embeddings and the eval's outcome judge are not counted.",
+		'',
+	);
+	lines.push(`| Live steps (${live.steps} of ${live.of} reported usage) | p50 | p95 |`, '| --- | --- | --- |');
+	lines.push(`| Scout input tokens | ${live.inputTokens.p50} | ${live.inputTokens.p95} |`);
+	lines.push(`| Scout output tokens | ${live.outputTokens.p50} | ${live.outputTokens.p95} |`);
+	lines.push(`| Cost per step (mean ${usd(live.costPerStep.mean)}) | ${usd(live.costPerStep.p50)} | ${usd(live.costPerStep.p95)} |`, '');
+	const share = ((100 * run.neurons) / PRICES.freeNeuronsPerDay).toFixed(0);
+	lines.push(
+		`**This run** (${run.steps} steps, scripted cases with the live model included): ${run.inputTokens} Scout input and ` +
+			`${run.outputTokens} output tokens, and ${run.jevInputTokens} Jev input tokens. Estimated cost ${usd(run.costUsd)}. ` +
+			`Scout used about ${Math.round(run.neurons)} neurons, ${share}% of the free ${PRICES.freeNeuronsPerDay} a day.`,
+		'',
+	);
+	return lines;
 }
 
 function runStatus(summary: Summary['cases'][number]): string {
@@ -146,6 +179,8 @@ export function renderReport(results: Results, cases: readonly EvalCase[]): stri
 		lines.push(`| ${kind} | ${stats.n} | ${stats.p50} | ${stats.p95} |`);
 	}
 	lines.push('');
+
+	lines.push(...usageLines(summary.usage));
 
 	lines.push('## Judged steps', '', 'Every answer the judge labeled, for spot-checking.', '');
 	lines.push('| Case | Run | Step | Expected | Judge | Answer |', '| --- | --- | --- | --- | --- | --- |');
