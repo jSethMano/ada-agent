@@ -2,7 +2,7 @@
 // page.config.ts. Pure: the caller reads the files and writes the output
 // (export-page.ts), so the rules here are tested on their own.
 
-import type { StepRun } from './drive.ts';
+import { isQuotaExhausted, type StepRun } from './drive.ts';
 import { METRIC_INFO, METRICS, traceOf, type Metric, type StepStatus, type Tally } from './grade.ts';
 import type { PageConfig, PageSide } from './page.config.ts';
 import type { Results } from './report.ts';
@@ -10,6 +10,12 @@ import { CATEGORIES, type Category, type EvalCase } from './types.ts';
 import type { TraceEntry } from '../src/trace.ts';
 
 export type PageTally = { passed: number; graded: number; ungraded: number };
+
+// Planned runs a results file has no grade for, and why: never sent, or cut
+// short and excluded. `reason` is classified, never the raw error text, so the
+// page words it itself. `quota` is the Workers AI daily allocation (AiError
+// 4006); `other` is anything else outside the Worker that stopped the run.
+export type PageMissing = { runs: number; reason: 'quota' | 'other' };
 
 export type PageRunData = {
 	label: string;
@@ -20,6 +26,9 @@ export type PageRunData = {
 	reps: number;
 	cases: { live: number; scripted: number };
 	incomplete: boolean;
+	// Set only when `incomplete`: `meta.incomplete`'s never-sent runs plus the
+	// ones cut short. Every metric and count above covers only the runs graded.
+	missing?: PageMissing;
 	// Uncommitted code changes when the run started. Files graded before
 	// iteration 3 also count the runner's own result files here.
 	dirty: boolean;
@@ -84,6 +93,10 @@ export type PageNewCases = {
 	label: string;
 	file: string;
 	retrieval: PageTally;
+	// Planned runs of these cases with no grade: `reps` per live case, one per
+	// scripted case. Absent when every one was graded, even if the file is
+	// incomplete for other cases.
+	missing?: PageMissing;
 	cases: Array<{ caseId: string; category: Category; why: string; harness: 'live' | 'scripted'; passed: number; runs: number }>;
 };
 
@@ -210,6 +223,10 @@ function sideView(results: Results, caseId: string, side: PageSide): PageSideDat
 	};
 }
 
+function missingReason(results: Results): PageMissing['reason'] {
+	return results.meta.incomplete && isQuotaExhausted(results.meta.incomplete.reason) ? 'quota' : 'other';
+}
+
 function runView(label: string, file: string, results: Results, shown: ReadonlyArray<Metric | 'overall'>): PageRunData {
 	const { meta, summary } = results;
 	const tally = ({ passed, graded, ungraded }: Tally): PageTally => ({ passed, graded, ungraded });
@@ -221,6 +238,9 @@ function runView(label: string, file: string, results: Results, shown: ReadonlyA
 		reps: meta.reps,
 		cases: meta.cases,
 		incomplete: meta.incomplete !== undefined,
+		...(meta.incomplete
+			? { missing: { runs: meta.incomplete.notRun + meta.incomplete.excluded.length, reason: missingReason(results) } }
+			: {}),
 		dirty: meta.dirty,
 		metrics: Object.fromEntries(shown.map((metric) => [metric, tally(summary.metrics[metric])])),
 		categories: Object.fromEntries(
@@ -265,6 +285,7 @@ export function newCasesView(
 	cases: readonly EvalCase[],
 ): PageNewCases {
 	const retrieval: PageTally = { passed: 0, graded: 0, ungraded: 0 };
+	let missing = 0;
 	const rows = caseIds.map((caseId) => {
 		const testCase = cases.find((candidate) => candidate.id === caseId);
 		if (!testCase) throw new Error(`new case not in the dataset: ${caseId}`);
@@ -281,9 +302,16 @@ export function newCasesView(
 			}
 		}
 		const passed = grades.filter((grade) => grade.status === 'pass').length;
+		missing += Math.max(0, (testCase.harness === 'live' ? results.meta.reps : 1) - grades.length);
 		return { caseId, category: testCase.category, why: testCase.why, harness: testCase.harness, passed, runs: grades.length };
 	});
-	return { label, file: file.split('/').at(-1) ?? file, retrieval, cases: rows };
+	return {
+		label,
+		file: file.split('/').at(-1) ?? file,
+		retrieval,
+		...(missing > 0 ? { missing: { runs: missing, reason: missingReason(results) } } : {}),
+		cases: rows,
+	};
 }
 
 /**

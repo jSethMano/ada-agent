@@ -15,7 +15,17 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { CASES } from './cases.ts';
-import { caseCounts, driveCase, isQuotaExhausted, turnFailures, type CaseRun, type Sent, type WireRequest } from './drive.ts';
+import {
+	caseCounts,
+	driveCase,
+	excludedNames,
+	incompleteFor,
+	isQuotaExhausted,
+	turnFailures,
+	type CaseRun,
+	type Sent,
+	type WireRequest,
+} from './drive.ts';
 import { datasetFingerprint, gradeCase, GRADER_VERSION, JUDGE_FLOOR, summarize, traceOf } from './grade.ts';
 import { JEV_MODEL } from '../src/jev/run-check.ts';
 import { createJudge, JUDGE_MODEL, JUDGE_VERSION } from './judge.ts';
@@ -398,10 +408,6 @@ function metaFor(run: RunShape): ResultsMeta {
 	};
 }
 
-function excludedNames(runs: CaseRun[]): string[] {
-	return runs.filter((run) => run.incomplete).map((run) => `${run.caseId} (${run.harness}, rep ${run.rep})`);
-}
-
 async function main() {
 	if (flags.regrade) {
 		const saved = JSON.parse(readFileSync(flags.regrade, 'utf8')) as Results;
@@ -422,8 +428,10 @@ async function main() {
 		];
 		if (flags.rep || flags.cases || from) {
 			meta.filter = notes.filter(Boolean).join('; ');
-			// Counted from what was kept, so a subset compares as the cases it holds.
+			// Counted from what was kept, so a subset compares as the cases it holds,
+			// and says only what it is missing itself.
 			meta.cases = caseCounts(runs);
+			if (meta.incomplete) meta.incomplete = incompleteFor(meta.incomplete, runs, meta.reps);
 		}
 		if (flags.rejudge) {
 			for (const run of runs) for (const step of run.steps) delete step.judge;

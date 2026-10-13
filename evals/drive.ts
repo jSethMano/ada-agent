@@ -54,6 +54,23 @@ export function caseCounts(runs: readonly CaseRun[]): { live: number; scripted: 
 	return { live: count('live'), scripted: count('scripted') };
 }
 
+/** The runs something outside the Worker cut short, by name: a results file's `meta.incomplete.excluded`. */
+export function excludedNames(runs: readonly CaseRun[]): string[] {
+	return runs.filter((run) => run.incomplete).map((run) => `${run.caseId} (${run.harness}, rep ${run.rep})`);
+}
+
+/**
+ * An incomplete run's `meta.incomplete`, restated for the runs a regrade kept
+ * (--cases, --cases-from, --rep). The run's own counts cover every case it
+ * planned, so iteration 4's shared copy claimed a never-sent run of a case it
+ * does not hold. Planned is `reps` per live case and one per scripted case,
+ * over the cases kept; `notRun` is what of that was never sent.
+ */
+export function incompleteFor<T extends { notRun: number; excluded: string[] }>(incomplete: T, runs: readonly CaseRun[], reps: number): T {
+	const { live, scripted } = caseCounts(runs);
+	return { ...incomplete, notRun: Math.max(0, live * reps + scripted - runs.length), excluded: excludedNames(runs) };
+}
+
 // A turn the Worker reported as failed, read from its log (src/index.ts writes
 // `{"event":"turn.failed","instance":…,"detail":…}`). A 502 body never says
 // why, by design, so the log is the only place the cause shows.

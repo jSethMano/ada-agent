@@ -76,24 +76,25 @@ export const PAGE_CONFIG: PageConfig = {
 			after: { label: 'iteration 3', file: ITERATION_3, rep: 1 },
 		},
 	],
-	// Once iteration 4 has run, add the "since RAG" table (evals/ITERATIONS.md,
-	// "Two tables", has the regrade commands that make the two files). The
-	// iteration 3 copy is the one graded under the labels iteration 4 runs with
-	// (grader 4, dataset 95872c63); every earlier copy fails the stamp check.
-	//
-	// comparisons: [
-	// 	{
-	// 		id: 'since-rag',
-	// 		title: 'Since the help articles: the 50 shared cases, under the current answer key',
-	// 		runs: [
-	// 			{ label: 'iteration 3', file: 'results/20261010T130510Z-2cd2468-iter4-labels-2.json' },
-	// 			{ label: 'iteration 4', file: 'results/<iteration 4>-shared.json' },
-	// 		],
-	// 		newCases: {
-	// 			label: 'iteration 4',
-	// 			file: 'results/<iteration 4>.json',
-	// 			caseIds: ['kb-vpn-wont-connect', 'kb-no-article', 'kb-tagalog', 'kb-misspelled', 'kb-escalation', 'fail-kb-poisoned-article'],
-	// 		},
-	// 	},
-	// ],
+	// The "since RAG" table (evals/ITERATIONS.md, "Two tables"). Iteration 3 is
+	// the copy graded under the labels iteration 4 ran with (grader 4, dataset
+	// 95872c63); every earlier copy fails the stamp check. Iteration 4 is
+	// INCOMPLETE, published as such (user decision, 2026-10-13): the quota cut
+	// rep 3 of 9 cases, 8 of them shared, so its shared copy grades 124 runs to
+	// iteration 3's 132, and the page says so (`incomplete`, `missing`).
+	comparisons: [
+		{
+			id: 'since-rag',
+			title: 'Since the help articles: the 50 shared cases, under the current answer key',
+			runs: [
+				{ label: 'iteration 3', file: 'results/20261010T130510Z-2cd2468-iter4-labels-2.json' },
+				{ label: 'iteration 4', file: 'results/20261013T004906Z-6222d8e-shared.json' },
+			],
+			newCases: {
+				label: 'iteration 4',
+				file: 'results/20261013T004906Z-6222d8e.json',
+				caseIds: ['kb-vpn-wont-connect', 'kb-no-article', 'kb-tagalog', 'kb-misspelled', 'kb-escalation', 'fail-kb-poisoned-article'],
+			},
+		},
+	],
 };

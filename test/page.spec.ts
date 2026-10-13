@@ -283,6 +283,30 @@ describe('a comparison table beside the historical one', () => {
 		).not.toHaveProperty('comparisons');
 	});
 
+	it('shares a table with an incomplete run, and says how many planned runs it lacks and why', () => {
+		const quota = {
+			reason: 'Workers AI daily quota exhausted: AiError: 4006: you have used up your daily free allocation of 10,000 neurons',
+			at: '2026-10-13T01:09:07.700Z',
+			notRun: 1,
+			excluded: [],
+		};
+		// Every case ran at least once, so the case counts still match the table's.
+		const cut = results({ ...later, reps: 3, incomplete: quota }, [1, 2]);
+		const built = page({ ...files, 'i3-current.json': results(later, [1, 2, 3]), 'i4-shared.json': cut, 'i4.json': cut });
+		const [, i4] = built.comparisons![0].runs;
+		expect(i4).toMatchObject({ incomplete: true, missing: { runs: 1, reason: 'quota' }, metrics: { overall: { passed: 2, graded: 2 } } });
+		expect(built.comparisons![0].runs[0]).not.toHaveProperty('missing');
+		expect(built.runs[0]).toMatchObject({ incomplete: false });
+		expect(built.runs[0]).not.toHaveProperty('missing');
+		// The new cases count only their own missing runs: 3 reps planned, 2 graded.
+		expect(built.comparisons![0].newCases).toMatchObject({ missing: { runs: 1, reason: 'quota' }, cases: [{ passed: 2, runs: 2 }] });
+		const other = results({ ...later, reps: 3, incomplete: { ...quota, reason: 'stopped by hand' } }, [1, 2]);
+		expect(page({ ...files, 'i3-current.json': results(later, [1, 2, 3]), 'i4-shared.json': other }).comparisons![0].runs[1].missing).toEqual({
+			runs: 1,
+			reason: 'other',
+		});
+	});
+
 	it('refuses a comparison whose runs, or new cases, were graded under different keys', () => {
 		expect(() => page({ ...files, 'i4-shared.json': results({ grading: { grader: 3, dataset: 'other' } }) })).toThrow(
 			'since-rag: iteration 4',

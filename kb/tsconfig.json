@@ -1,5 +1,7 @@
 {
 	"extends": "../tsconfig.json",
+	/* Listed, not left to the default: TypeScript 6 loads no @types package unless named here. */
+	"compilerOptions": { "types": ["node"] },
 	"include": ["./**/*.ts", "../worker-configuration.d.ts"],
 	"exclude": []
 }

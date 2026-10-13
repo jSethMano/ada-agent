@@ -4,6 +4,7 @@ import { CASES } from '../evals/cases';
 import {
 	caseCounts,
 	driveCase,
+	incompleteFor,
 	isQuotaExhausted,
 	turnFailures,
 	type CaseRun,
@@ -855,6 +856,22 @@ describe('caseCounts', () => {
 		const run = (caseId: string, harness: 'live' | 'scripted', rep = 1): CaseRun => ({ ...runOf([]), caseId, harness, rep });
 		expect(caseCounts([run('a', 'live'), run('a', 'live', 2), run('b', 'live'), run('c', 'scripted')])).toEqual({ live: 2, scripted: 1 });
 		expect(caseCounts([])).toEqual({ live: 0, scripted: 0 });
+	});
+
+	it("restates an incomplete run's missing runs for the subset a regrade kept", () => {
+		const run = (caseId: string, rep: number, incomplete?: string): CaseRun => ({
+			...runOf([]),
+			caseId,
+			rep,
+			...(incomplete ? { incomplete } : {}),
+		});
+		// Iteration 4's shape: 3 reps planned, the quota cut rep 3, one case cut mid-run.
+		const kept = [run('a', 1), run('a', 2), run('a', 3), run('b', 1), run('b', 2), run('b', 3, 'quota'), run('c', 1), run('c', 2)];
+		const whole = { reason: 'Workers AI daily quota exhausted', at: 'then', notRun: 5, excluded: ['b (live, rep 3)'] };
+		expect(incompleteFor(whole, kept, 3)).toEqual({ ...whole, notRun: 1, excluded: ['b (live, rep 3)'] });
+		// Planned minus graded, either way.
+		expect(3 * 3 - kept.filter((r) => !r.incomplete).length).toBe(1 + 1);
+		expect(incompleteFor(whole, [run('a', 1), run('a', 2), run('a', 3)], 3)).toEqual({ ...whole, notRun: 0, excluded: [] });
 	});
 });
 
